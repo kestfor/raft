@@ -1,0 +1,10 @@
+# A standalone node. Add other cluster members to peers for a multi-node cluster.
+id: node1
+listen: 127.0.0.1:9001
+peers: {}
+election_min: 500ms
+election_max: 1s
+heartbeat: 100ms
+rpc_timeout: 200ms
+log_level: info
+log_format: json

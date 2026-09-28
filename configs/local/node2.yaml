@@ -1,0 +1,7 @@
+id: node2
+listen: :19002
+peers:
+  node1: 127.0.0.1:19001
+  node3: 127.0.0.1:19003
+log_format: plain
+log_level: debug

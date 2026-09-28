@@ -1,0 +1,24 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt     # стандартное форматирование Go
+    - gofumpt   # строже gofmt: убирает лишние пустые строки, группирует var-блоки
+    - gci       # сортировка и группировка импортов по секциям
+    - golines   # перенос длинных строк (>max-len) с сохранением читаемости
+  settings:
+    gofmt:
+      simplify: true        # s[a:len(s)] → s[a:], упрощение range и composite literals
+    gofumpt:
+      extra-rules: true     # доп. правила: пустые строки между функциями, группировка
+    gci:
+      sections: # порядок групп импортов (разделены пустой строкой)
+        - Standard          # 1. stdlib: "fmt", "context", "net/http"
+        - Default           # 2. сторонние: "github.com/...", "go.uber.org/..."
+        - Prefix(gitlab.tcsbank.ru/infra-dev/go-infracore) # 3. инфраструктура
+        - Prefix(gitlab.tcsbank.ru/hwaas/nmsgo)            # 4. наш проект
+    golines:
+      max-len: 120          # максимальная длина строки
+      tab-len: 4            # ширина таба для расчёта длины
+      shorten-comments: true  # переносить длинные комментарии
+      reformat-tags: true     # переформатировать struct tags

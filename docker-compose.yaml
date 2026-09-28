@@ -1,0 +1,36 @@
+x-node: &node
+  build: .
+  image: raft-election:local
+  init: true
+  stop_grace_period: 5s
+  command: ["--config=/etc/raft/config.yaml"]
+  environment:
+    CLICOLOR_FORCE: ${CLICOLOR_FORCE:-1}
+    RAFT_LOG_FORMAT: ${RAFT_LOG_FORMAT:-plain}
+    RAFT_LOG_LEVEL: ${RAFT_LOG_LEVEL:-debug}
+  healthcheck:
+    test: ["CMD", "/grpc_health_probe", "-addr=127.0.0.1:9000", "-connect-timeout=500ms", "-rpc-timeout=500ms"]
+    interval: 5s
+    timeout: 2s
+    start_period: 3s
+    retries: 3
+
+services:
+  node1:
+    <<: *node
+    volumes:
+      - ./configs/compose/node1.yaml:/etc/raft/config.yaml:ro
+    ports:
+      - "9001:9000"
+  node2:
+    <<: *node
+    volumes:
+      - ./configs/compose/node2.yaml:/etc/raft/config.yaml:ro
+    ports:
+      - "9002:9000"
+  node3:
+    <<: *node
+    volumes:
+      - ./configs/compose/node3.yaml:/etc/raft/config.yaml:ro
+    ports:
+      - "9003:9000"

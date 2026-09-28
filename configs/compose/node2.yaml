@@ -1,0 +1,5 @@
+id: node2
+listen: :9000
+peers:
+  node1: node1:9000
+  node3: node3:9000
