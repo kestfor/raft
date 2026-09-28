@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kestfor/raft/internal/transport/grpc/raftpb"
 	"github.com/kestfor/raft/pkg/raft"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -21,7 +22,10 @@ import (
 type handlerStub struct {
 	requestVote   func(context.Context, raft.RequestVoteRequest) (raft.RequestVoteResponse, error)
 	appendEntries func(context.Context, raft.AppendEntriesRequest) (raft.AppendEntriesResponse, error)
+	status        raft.Status
 }
+
+func (h handlerStub) Status() raft.Status { return h.status }
 
 func (h handlerStub) RequestVote(ctx context.Context, req raft.RequestVoteRequest) (raft.RequestVoteResponse, error) {
 	return h.requestVote(ctx, req)
@@ -98,6 +102,22 @@ func TestProtocolModelsRoundTrip(t *testing.T) {
 
 	if _, err := client.RequestVote(ctx, "unknown", wantVote); err == nil {
 		t.Fatal("unknown peer accepted")
+	}
+}
+
+func TestGetStatusReturnsCurrentNodeState(t *testing.T) {
+	want := raft.Status{ID: "b", Role: raft.Leader, Term: 7, LeaderID: "b"}
+	client := testClient(t, handlerStub{status: want})
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	response, err := raftpb.NewRaftServiceClient(client.connections["b"]).GetStatus(ctx, &raftpb.GetStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetId() != string(want.ID) || response.GetRole() != string(want.Role) ||
+		response.GetTerm() != want.Term || response.GetLeaderId() != string(want.LeaderID) {
+		t.Fatalf("status = %+v, want %+v", response, want)
 	}
 }
 

@@ -20,6 +20,13 @@ type service struct {
 	handler Handler
 }
 
+func (s *service) GetStatus(context.Context, *raftpb.GetStatusRequest) (*raftpb.GetStatusResponse, error) {
+	state := s.handler.Status()
+	return &raftpb.GetStatusResponse{
+		Id: string(state.ID), Role: string(state.Role), Term: state.Term, LeaderId: string(state.LeaderID),
+	}, nil
+}
+
 func (s *service) RequestVote(
 	ctx context.Context,
 	req *raftpb.RequestVoteRequest,
