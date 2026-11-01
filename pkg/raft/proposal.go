@@ -39,6 +39,7 @@ func (n *Node) appendCommand(ctx context.Context, data []byte) (Entry, error) {
 	n.log.entries = append(n.log.entries, entry)
 	n.advanceCommit()
 	n.wakeRun()
+
 	return entry, nil
 }
 
@@ -55,6 +56,7 @@ func (n *Node) waitForCommit(ctx context.Context, entry Entry) error {
 			if err == ErrNotLeader {
 				return ErrLeadershipLost
 			}
+
 			return err
 		}
 
@@ -64,10 +66,12 @@ func (n *Node) waitForCommit(ctx context.Context, entry Entry) error {
 
 		changed := n.log.changed
 		n.mu.Unlock()
+
 		select {
 		case <-ctx.Done():
 		case <-changed:
 		}
+
 		n.mu.Lock()
 	}
 }

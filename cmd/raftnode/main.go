@@ -136,10 +136,12 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 	if err := makeDataDir(cfg.DataDir); err != nil {
 		return err
 	}
+
 	journal, err := wal.Open(filepath.Join(cfg.DataDir, "raft.wal"))
 	if err != nil {
 		return err
 	}
+
 	defer func() { result = errors.Join(result, journal.Close()) }()
 	raftConfig.Storage = journal
 
@@ -150,6 +152,7 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 	if err != nil {
 		return err
 	}
+
 	defer func() {
 		if err := client.Close(); err != nil {
 			logger.ErrorContext(ctx, "close transport", slog.Any("error", err))
@@ -165,6 +168,7 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+
 	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
@@ -245,21 +249,26 @@ func makeDataDir(path string) error {
 		if !info.IsDir() {
 			return fmt.Errorf("data path %q is not a directory", path)
 		}
+
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+
 	parent := filepath.Dir(path)
 	if err := makeDataDir(parent); err != nil {
 		return err
 	}
+
 	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return fmt.Errorf("create data directory: %w", err)
 	}
+
 	dir, err := os.Open(parent)
 	if err != nil {
 		return err
 	}
+
 	return errors.Join(dir.Sync(), dir.Close())
 }
 

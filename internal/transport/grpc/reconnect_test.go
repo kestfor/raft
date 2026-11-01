@@ -38,15 +38,18 @@ func TestClientReconnectsAfterDNSFailureAndRestart(t *testing.T) {
 				if address != "node2:9000" {
 					t.Errorf("dial address = %q, want unresolved hostname", address)
 				}
+
 				if listener := endpoint.Load(); listener != nil {
 					return listener.DialContext(ctx)
 				}
+
 				return nil, &net.DNSError{Name: address, Err: "no such host", IsNotFound: true}
 			}),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		defer func() { _ = client.Close() }()
 		conn := client.connections["b"]
 
@@ -80,6 +83,7 @@ func TestClientReconnectsAfterDNSFailureAndRestart(t *testing.T) {
 			if err != nil || !vote.VoteGranted {
 				t.Fatalf("vote after recovery = %+v, error = %v", vote, err)
 			}
+
 			heartbeat, err := client.AppendEntries(ctx, "b", raft.AppendEntriesRequest{Term: 1, LeaderID: "a"})
 			cancel()
 			if err != nil || !heartbeat.Success {
@@ -99,6 +103,7 @@ func TestClientWaitingForConnectionHonorsContext(t *testing.T) {
 			if cancelEarly {
 				name = method + "/cancel"
 			}
+
 			t.Run(name, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					client, err := NewClient(map[raft.NodeID]string{"b": "node2:9000"},
@@ -110,6 +115,7 @@ func TestClientWaitingForConnectionHonorsContext(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+
 					defer func() { _ = client.Close() }()
 					conn := client.connections["b"]
 					conn.Connect()
@@ -125,6 +131,7 @@ func TestClientWaitingForConnectionHonorsContext(t *testing.T) {
 						} else {
 							_, err = client.AppendEntries(ctx, "b", raft.AppendEntriesRequest{Term: 1, LeaderID: "a"})
 						}
+
 						result <- err
 					}()
 					synctest.Wait()
@@ -133,11 +140,13 @@ func TestClientWaitingForConnectionHonorsContext(t *testing.T) {
 						t.Fatalf("RPC did not wait for connection: %v", err)
 					default:
 					}
+
 					want := codes.DeadlineExceeded
 					if cancelEarly {
 						want = codes.Canceled
 						cancel()
 					}
+
 					if err := <-result; status.Code(err) != want {
 						t.Fatalf("RPC returned %v, want %s", err, want)
 					}

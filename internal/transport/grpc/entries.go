@@ -10,6 +10,7 @@ func entriesToProto(entries []raft.Entry) []*raftpb.Entry {
 	for i, entry := range entries {
 		result[i] = &raftpb.Entry{Index: entry.Index, Term: entry.Term, Data: entry.Data, NoOp: entry.NoOp}
 	}
+
 	return result
 }
 
@@ -23,5 +24,6 @@ func entriesFromProto(entries []*raftpb.Entry) []raft.Entry {
 			NoOp:  entry.GetNoOp(),
 		}
 	}
+
 	return result
 }

@@ -61,6 +61,7 @@ func TestVoteRules(t *testing.T) {
 		{"old term", RequestVoteRequest{Term: 1, CandidateID: "b"}, false, 2},
 		{"new term", RequestVoteRequest{Term: 3, CandidateID: "c"}, true, 3},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := requestVote(t, node, tt.request)
@@ -114,6 +115,7 @@ func TestHigherTermInEveryRPCStepsDown(t *testing.T) {
 			}
 		}},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			node, ctx := newElectionTestNode(t, "a", []NodeID{"b", "c"})
@@ -211,9 +213,10 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 		appendReq         AppendEntriesRequest
 		success           bool
 	}
+
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // The simulation delivers outgoing messages explicitly.
-	for seed := uint64(0); seed < 20; seed++ {
+	for seed := range uint64(20) {
 		rng := rand.New(rand.NewPCG(seed, 42))
 		ids := []NodeID{"a", "b", "c", "d", "e"}
 		nodes := make(map[NodeID]*Node)
@@ -263,8 +266,9 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 				}
 			}
 		}
+
 		leaders := make(map[uint64]NodeID)
-		for step := 0; step < 3000; step++ {
+		for step := range 3000 {
 			msg := message{to: ids[rng.IntN(len(ids))], kind: broadcastTick}
 			switch {
 			case rng.IntN(5) == 0:
@@ -277,6 +281,7 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 				if rng.IntN(10) == 0 {
 					continue // drop
 				}
+
 				if rng.IntN(10) == 0 {
 					queue = append(queue, msg) // duplicate
 				}
@@ -289,6 +294,7 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 				if err := node.startElection(ctx); err != nil {
 					t.Fatal(err)
 				}
+
 				sendRPCs(node)
 			case broadcastTick:
 				sendRPCs(node)

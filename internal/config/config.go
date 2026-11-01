@@ -71,6 +71,7 @@ func (c *Config) readYAML(path string) error {
 	if err != nil {
 		return fmt.Errorf("open config: %w", err)
 	}
+
 	defer func() { _ = file.Close() }()
 
 	decoder := yaml.NewDecoder(file)
@@ -95,6 +96,7 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.DataDir) == "" {
 		return fmt.Errorf("data directory must not be empty")
 	}
+
 	if c.LogFormat != LogFormatJSON && c.LogFormat != LogFormatPlain {
 		return fmt.Errorf("invalid log format %q: expected json or plain", c.LogFormat)
 	}

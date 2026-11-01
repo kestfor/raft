@@ -205,9 +205,11 @@ func TestLoggerFormat(t *testing.T) {
 				if err := json.Unmarshal(output.Bytes(), &record); err != nil {
 					t.Fatalf("invalid JSON log: %v", err)
 				}
+
 				if record["msg"] != "sample" || record["node"] != "a" {
 					t.Fatalf("unexpected JSON log: %v", record)
 				}
+
 				return
 			}
 
@@ -251,6 +253,7 @@ func TestLoggerForcedColor(t *testing.T) {
 			if gotColor := strings.Contains(output.String(), "\x1b["); gotColor != tt.wantColor {
 				t.Fatalf("color = %t, want %t: %q", gotColor, tt.wantColor, output.String())
 			}
+
 			if tt.wantColor && !strings.Contains(output.String(), "\x1b[90mnode") {
 				t.Fatalf("key is not explicit gray: %q", output.String())
 			}

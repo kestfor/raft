@@ -50,6 +50,7 @@ func NewClient(addresses map[raft.NodeID]string, options ...grpc.DialOption) (*C
 		if !strings.Contains(address, "://") {
 			address = "passthrough:///" + address
 		}
+
 		conn, err := grpc.NewClient(address, options...)
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("grpc transport: connect to %q: %w", id, err), c.Close())

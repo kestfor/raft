@@ -38,9 +38,11 @@ type electionState struct {
 type logState struct {
 	entries     []Entry // Includes an empty entry at index zero.
 	commitIndex uint64
-	nextIndex   map[NodeID]uint64
-	matchIndex  map[NodeID]uint64
-	changed     chan struct{} // Wakes Propose on commit, stepdown, or shutdown.
+
+	nextIndex  map[NodeID]uint64
+	matchIndex map[NodeID]uint64
+
+	changed chan struct{} // Wakes Propose on commit, stepdown, or shutdown.
 }
 
 type runtimeState struct {
@@ -84,9 +86,11 @@ func NewNode(config Config, transport Transport) (*Node, error) {
 			wake:        make(chan struct{}, 1),
 		},
 	}
+
 	if err := n.restore(); err != nil {
 		return nil, fmt.Errorf("raft: restore: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -136,6 +140,7 @@ func (n *Node) Run(ctx context.Context) error {
 			if err := n.handleElectionTimeout(ctx); err != nil {
 				return err
 			}
+
 			continue
 
 		case <-n.runtime.wake:
@@ -166,6 +171,7 @@ func (n *Node) RequestVote(ctx context.Context, req RequestVoteRequest) (Request
 	if (req.LastLogIndex == 0) != (req.LastLogTerm == 0) || req.LastLogTerm > req.Term {
 		return RequestVoteResponse{}, fmt.Errorf("%w: invalid last log index or term", ErrInvalidRequest)
 	}
+
 	if err := n.advanceTerm(ctx, req.Term); err != nil {
 		return RequestVoteResponse{}, err
 	}
@@ -180,6 +186,7 @@ func (n *Node) RequestVote(ctx context.Context, req RequestVoteRequest) (Request
 				return RequestVoteResponse{}, err
 			}
 		}
+
 		n.election.votedFor = req.CandidateID
 		n.resetElectionTimer()
 	}
@@ -239,6 +246,7 @@ func (n *Node) startElection(ctx context.Context) error {
 	if err := n.save(n.election.currentTerm+1, n.config.ID, nil); err != nil {
 		return err
 	}
+
 	n.election.currentTerm++
 	n.election.role = Candidate
 	n.election.leaderID = ""
@@ -253,6 +261,7 @@ func (n *Node) startElection(ctx context.Context) error {
 	}
 
 	n.requestVotes(ctx)
+
 	return nil
 }
 
@@ -263,6 +272,7 @@ func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) e
 		if err := n.save(term, "", nil); err != nil {
 			return err
 		}
+
 		n.election.currentTerm = term
 		n.election.votedFor = ""
 	}
@@ -284,7 +294,9 @@ func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) e
 	if leader == "" {
 		reason = "higher_term_observed"
 	}
+
 	n.logStateChange(ctx, previous, reason)
+
 	return nil
 }
 
@@ -295,11 +307,13 @@ func (n *Node) becomeLeader(ctx context.Context) error {
 	if err := n.save(n.election.currentTerm, n.election.votedFor, []Entry{entry}); err != nil {
 		return err
 	}
+
 	n.log.nextIndex = make(map[NodeID]uint64, len(n.config.Peers))
 	n.log.matchIndex = make(map[NodeID]uint64, len(n.config.Peers))
 	for _, peer := range n.config.Peers {
 		n.log.nextIndex[peer] = entry.Index
 	}
+
 	n.log.entries = append(n.log.entries, entry)
 	n.election.role = Leader
 	n.election.leaderID = n.config.ID
@@ -310,6 +324,7 @@ func (n *Node) becomeLeader(ctx context.Context) error {
 
 	n.advanceCommit()
 	n.replicateAll(ctx)
+
 	return nil
 }
 
@@ -317,6 +332,7 @@ func (n *Node) advanceTerm(ctx context.Context, term uint64) error {
 	if term > n.election.currentTerm {
 		return n.becomeFollower(ctx, term, "")
 	}
+
 	return nil
 }
 
@@ -344,8 +360,10 @@ func (n *Node) handleVoteResponse(ctx context.Context, peer NodeID, requestTerm 
 
 func (n *Node) requestVotes(ctx context.Context) {
 	req := RequestVoteRequest{
-		Term: n.election.currentTerm, CandidateID: n.config.ID,
-		LastLogIndex: n.lastIndex(), LastLogTerm: n.log.entries[n.lastIndex()].Term,
+		Term:         n.election.currentTerm,
+		CandidateID:  n.config.ID,
+		LastLogIndex: n.lastIndex(),
+		LastLogTerm:  n.log.entries[n.lastIndex()].Term,
 	}
 
 	for _, peer := range n.config.Peers {
@@ -450,6 +468,7 @@ func (n *Node) validateRequest(ctx context.Context, senderID NodeID, term uint64
 		if n.runtime.failure != nil {
 			return n.runtime.failure
 		}
+
 		return ErrNotRunning
 	}
 
@@ -474,8 +493,12 @@ func (n *Node) randomElectionTimeout() time.Duration {
 
 func (n *Node) status() Status {
 	return Status{
-		ID: n.config.ID, Role: n.election.role, Term: n.election.currentTerm, LeaderID: n.election.leaderID,
-		LastLogIndex: n.lastIndex(), CommitIndex: n.log.commitIndex,
+		ID:           n.config.ID,
+		Role:         n.election.role,
+		Term:         n.election.currentTerm,
+		LeaderID:     n.election.leaderID,
+		LastLogIndex: n.lastIndex(),
+		CommitIndex:  n.log.commitIndex,
 	}
 }
 
@@ -493,6 +516,7 @@ func (n *Node) fail(err error) error {
 		n.notifyLogChange()
 		n.wakeRun()
 	}
+
 	return n.runtime.failure
 }
 

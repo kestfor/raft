@@ -314,6 +314,7 @@ func TestConfigValidation(t *testing.T) {
 		"zero RPC timeout": func(c *Config) { c.RPCTimeout = 0 },
 		"long RPC timeout": func(c *Config) { c.RPCTimeout = c.ElectionTimeoutMin },
 	}
+
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			cfg := DefaultConfig("a", []NodeID{"b"})

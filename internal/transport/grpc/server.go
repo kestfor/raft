@@ -70,6 +70,7 @@ func (s *service) Propose(ctx context.Context, req *raftpb.ProposeRequest) (*raf
 	if err != nil {
 		return nil, toGRPCError(err)
 	}
+
 	return &raftpb.ProposeResponse{Index: index}, nil
 }
 

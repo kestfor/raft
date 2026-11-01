@@ -30,6 +30,7 @@ func TestWholeClusterRestartsFromWAL(t *testing.T) {
 	for _, id := range ids {
 		paths[id] = filepath.Join(t.TempDir(), "raft.wal")
 	}
+
 	var committed uint64
 	for attempt := range 2 {
 		func() {
@@ -51,10 +52,12 @@ func TestWholeClusterRestartsFromWAL(t *testing.T) {
 						peers = append(peers, other)
 					}
 				}
+
 				journal, err := wal.Open(paths[id])
 				if err != nil {
 					t.Fatal(err)
 				}
+
 				journals = append(journals, journal)
 				cfg := testConfig(id, peers)
 				cfg.ElectionTimeoutMin = time.Duration(300+i*200) * time.Millisecond
@@ -65,16 +68,19 @@ func TestWholeClusterRestartsFromWAL(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+
 				network.nodes[id] = n
 				if attempt > 0 &&
 					(n.lastIndex() < committed || string(n.log.entries[committed].Data) != "survives restart") {
 					t.Fatalf("node %s lost persisted command", id)
 				}
 			}
+
 			done := make(chan error, len(ids))
 			for _, n := range network.nodes {
 				go func() { done <- n.Run(ctx) }()
 			}
+
 			defer func() {
 				cancel()
 				for range ids {
@@ -91,11 +97,13 @@ func TestWholeClusterRestartsFromWAL(t *testing.T) {
 						return true
 					}
 				}
+
 				return false
 			})
 			if attempt == 0 {
 				committed = propose(t, leader, "survives restart")
 			}
+
 			// On restart there are no new client commands: the leader's no-op
 			// must restore commitment of the old prefix on every member.
 			waitUntil(t, func() bool {
@@ -104,6 +112,7 @@ func TestWholeClusterRestartsFromWAL(t *testing.T) {
 						return false
 					}
 				}
+
 				return true
 			})
 		}()

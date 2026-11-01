@@ -73,6 +73,7 @@ func TestEnvironmentOverridesYAML(t *testing.T) {
 		"RAFT_LOG_LEVEL":    "info",
 		"RAFT_LOG_FORMAT":   "json",
 	}
+
 	for name, value := range values {
 		t.Setenv(name, value)
 	}
@@ -94,6 +95,7 @@ log_format: plain
 		HeartbeatInterval: 150 * time.Millisecond, RPCTimeout: 300 * time.Millisecond, LogLevel: slog.LevelInfo,
 		LogFormat: LogFormatJSON,
 	}
+
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("config = %+v, want %+v", cfg, want)
 	}

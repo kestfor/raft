@@ -84,6 +84,7 @@ func TestProtocolModelsRoundTrip(t *testing.T) {
 		LeaderCommit: 8,
 		Entries:      []raft.Entry{{Index: 9, Term: 19, Data: []byte{0, 1, 255}}, {Index: 10, Term: 19, NoOp: true}},
 	}
+
 	client := testClient(t, handlerStub{
 		requestVote: func(_ context.Context, req raft.RequestVoteRequest) (raft.RequestVoteResponse, error) {
 			if req != wantVote {
@@ -128,6 +129,7 @@ func TestGetStatusReturnsCurrentNodeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if response.GetId() != string(want.ID) || response.GetRole() != string(want.Role) ||
 		response.GetTerm() != want.Term || response.GetLeaderId() != string(want.LeaderID) || response.GetLastLogIndex() != want.LastLogIndex || response.GetCommitIndex() != want.CommitIndex {
 		t.Fatalf("status = %+v, want %+v", response, want)
@@ -266,6 +268,7 @@ func TestThreeNodeGRPCElectionAndFailover(t *testing.T) {
 			done:   make(chan struct{}),
 			active: true,
 		}
+
 		members[id] = member
 		Register(member.server, node)
 		go func() {
@@ -298,12 +301,15 @@ func TestThreeNodeGRPCElectionAndFailover(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		return response.GetIndex()
 	}
+
 	first := proposeTo(leader, []byte("before failover"))
 	if first < 2 || members[leader].node.Status().CommitIndex < first {
 		t.Fatal("proposal was not committed")
 	}
+
 	oldTerm := members[leader].node.Status().Term
 	members[leader].active = false
 	members[leader].cancel()
@@ -313,6 +319,7 @@ func TestThreeNodeGRPCElectionAndFailover(t *testing.T) {
 	if replacement == leader || members[replacement].node.Status().Term <= oldTerm {
 		t.Fatalf("invalid replacement %s after leader %s in term %d", replacement, leader, oldTerm)
 	}
+
 	if next := proposeTo(replacement, []byte("after failover")); next <= first {
 		t.Fatal("new leader lost committed prefix")
 	}
@@ -332,6 +339,7 @@ func waitForClusterLeader(t *testing.T, members map[raft.NodeID]*clusterMember) 
 			for id, member := range members {
 				t.Logf("node %s: %+v, active=%v", id, member.node.Status(), member.active)
 			}
+
 			t.Fatal("cluster did not converge on one leader")
 		case <-ticker.C:
 			var leader raft.NodeID
@@ -343,15 +351,18 @@ func waitForClusterLeader(t *testing.T, members map[raft.NodeID]*clusterMember) 
 					leader, term = id, state.Term
 				}
 			}
+
 			if count != 1 {
 				continue
 			}
+
 			consistent := true
 			for _, member := range members {
 				if state := member.node.Status(); member.active && (state.LeaderID != leader || state.Term != term) {
 					consistent = false
 				}
 			}
+
 			if consistent {
 				return leader
 			}

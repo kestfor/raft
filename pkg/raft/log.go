@@ -52,6 +52,7 @@ func (n *Node) AppendEntries(ctx context.Context, req AppendEntriesRequest) (App
 	}
 
 	response.Success = true
+
 	return response, nil
 }
 
@@ -70,7 +71,9 @@ func (n *Node) mergeEntries(entries []Entry) error {
 		if err := n.save(n.election.currentTerm, n.election.votedFor, suffix); err != nil {
 			return err
 		}
+
 		n.log.entries = append(n.log.entries[:entry.Index], suffix...)
+
 		return nil
 	}
 
@@ -133,10 +136,14 @@ func (n *Node) replicatePeer(ctx context.Context, peer NodeID) {
 	}
 
 	req := AppendEntriesRequest{
-		Term: n.election.currentTerm, LeaderID: n.config.ID,
-		PrevLogIndex: next - 1, PrevLogTerm: n.log.entries[next-1].Term,
-		Entries: cloneEntries(n.log.entries[next:end]), LeaderCommit: n.log.commitIndex,
+		Term:         n.election.currentTerm,
+		LeaderID:     n.config.ID,
+		PrevLogIndex: next - 1,
+		PrevLogTerm:  n.log.entries[next-1].Term,
+		Entries:      cloneEntries(n.log.entries[next:end]),
+		LeaderCommit: n.log.commitIndex,
 	}
+
 	n.startRPC(ctx, peer, func() { n.sendAppendEntries(ctx, peer, req) })
 }
 
@@ -163,6 +170,7 @@ func (n *Node) handleAppendResponse(
 			n.log.nextIndex[peer]--
 			n.replicatePeer(ctx, peer)
 		}
+
 		return
 	}
 
