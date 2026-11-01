@@ -1,11 +1,17 @@
 # A standalone node. Add other cluster members to peers for a multi-node cluster.
-id: node1
-listen: 127.0.0.1:9001
-peers: {}
-election_min: 500ms
-election_max: 1s
-heartbeat: 100ms
-rpc_timeout: 200ms
-log_level: info
-log_format: json
-data_dir: data
+http:
+  listen_address: 127.0.0.1:18001
+
+raft:
+  node_id: node1
+  listen_address: 127.0.0.1:9001
+  peers: {}
+  election_timeout_min: 500ms
+  election_timeout_max: 1s
+  heartbeat_interval: 100ms
+  rpc_timeout: 200ms
+  data_dir: data
+
+log:
+  level: info
+  format: json

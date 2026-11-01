@@ -1,6 +1,6 @@
 version: v2
 modules:
-  - path: api
+  - path: api/grpc
 lint:
   use:
     - STANDARD

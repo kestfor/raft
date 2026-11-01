@@ -21,10 +21,11 @@ type Node struct {
 
 	transport Transport
 
-	mu       sync.Mutex // protects election, log, and runtime
-	election electionState
-	log      logState
-	runtime  runtimeState
+	mu        sync.Mutex // protects election, log, runtime, and proposals
+	election  electionState
+	log       logState
+	runtime   runtimeState
+	proposals *proposalBatch
 }
 
 type electionState struct {
@@ -41,6 +42,8 @@ type logState struct {
 
 	nextIndex  map[NodeID]uint64
 	matchIndex map[NodeID]uint64
+	readRound  uint64
+	readAck    map[NodeID]uint64
 
 	changed chan struct{} // Wakes Propose on commit, stepdown, or shutdown.
 }
@@ -108,12 +111,14 @@ func (n *Node) Run(ctx context.Context) error {
 	timeout := n.randomElectionTimeout()
 	n.runtime.electionDeadline = time.Now().Add(timeout)
 	n.runtime.electionTimer = time.NewTimer(timeout)
+	n.notifyLogChange()
 	n.mu.Unlock()
 
 	defer func() {
 		n.mu.Lock()
 		n.runtime.running = false
 		n.runtime.electionTimer.Stop()
+		n.rejectProposals(ErrNotRunning)
 		n.notifyLogChange()
 		n.mu.Unlock()
 
@@ -283,6 +288,7 @@ func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) e
 	n.election.votes = nil
 	n.log.nextIndex, n.log.matchIndex = nil, nil
 	if previous.Role == Leader {
+		n.rejectProposals(ErrLeadershipLost)
 		n.notifyLogChange()
 	}
 
@@ -310,6 +316,7 @@ func (n *Node) becomeLeader(ctx context.Context) error {
 
 	n.log.nextIndex = make(map[NodeID]uint64, len(n.config.Peers))
 	n.log.matchIndex = make(map[NodeID]uint64, len(n.config.Peers))
+	n.log.readAck = make(map[NodeID]uint64, len(n.config.Peers))
 	for _, peer := range n.config.Peers {
 		n.log.nextIndex[peer] = entry.Index
 	}
@@ -418,7 +425,7 @@ func (n *Node) requestVote(ctx context.Context, peer NodeID, req RequestVoteRequ
 	n.handleVoteResponse(ctx, peer, req.Term, response)
 }
 
-func (n *Node) sendAppendEntries(ctx context.Context, peer NodeID, req AppendEntriesRequest) {
+func (n *Node) sendAppendEntries(ctx context.Context, peer NodeID, req AppendEntriesRequest, readRound uint64) {
 	rpcCtx, cancel := context.WithTimeout(ctx, n.config.RPCTimeout)
 	defer cancel()
 
@@ -436,6 +443,11 @@ func (n *Node) sendAppendEntries(ctx context.Context, peer NodeID, req AppendEnt
 	}
 
 	n.handleAppendResponse(ctx, peer, req, response)
+	if n.election.role == Leader && req.Term == n.election.currentTerm &&
+		response.Term == req.Term && response.Success && readRound > n.log.readAck[peer] {
+		n.log.readAck[peer] = readRound
+		n.notifyLogChange()
+	}
 }
 
 // Helpers below require mu to be held.
@@ -513,6 +525,7 @@ func (n *Node) fail(err error) error {
 	if n.runtime.failure == nil {
 		n.runtime.failure = err
 		n.runtime.running = false
+		n.rejectProposals(err)
 		n.notifyLogChange()
 		n.wakeRun()
 	}

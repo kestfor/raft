@@ -1,0 +1,218 @@
+openapi: 3.0.3
+info:
+  title: Raft KV API
+  version: 1.0.0
+  description: |
+    A replicated string-to-bytes store. Writes return after majority commit and
+    local application. Reads confirm leadership with a fresh quorum and wait
+    for the committed prefix to be applied; reads do not append log entries.
+
+    Followers return 307 with the leader URL, preserving method and body.
+    Open Swagger UI on the leader for Try it out: browsers may block a redirect
+    between different origins. raftctl and curl -L follow these redirects.
+
+    A timeout or failed write response does not imply cancellation. The command
+    may still commit. Retried writes are not deduplicated.
+servers:
+  - url: /
+    description: This node
+tags:
+  - name: KV
+    description: Operations on the replicated store
+  - name: Node
+    description: Local diagnostic status (never redirected)
+paths:
+  /v1/kv/{key}:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        description: |
+          Non-empty UTF-8 key, at most 4096 bytes. URL-encode as a single segment,
+          including slashes. The server does not normalize dot segments.
+        schema:
+          type: string
+          minLength: 1
+        example: greeting
+    put:
+      tags: [KV]
+      operationId: putValue
+      summary: Create or replace a value
+      description: Maximum value size is 512 KiB. An empty value is allowed.
+      requestBody:
+        required: false
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          text/plain:
+            schema:
+              type: string
+            example: Hello, Raft!
+      responses:
+        '200':
+          $ref: '#/components/responses/Applied'
+        '307':
+          $ref: '#/components/responses/LeaderRedirect'
+        '400':
+          $ref: '#/components/responses/InvalidCommand'
+        '413':
+          description: Value exceeds 512 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example: {error: value exceeds 512 KiB}
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+        '500':
+          $ref: '#/components/responses/Failed'
+    get:
+      tags: [KV]
+      operationId: getValue
+      summary: Read a value with a fresh quorum confirmation
+      responses:
+        '200':
+          description: Exact value bytes, without an added newline
+          headers:
+            Cache-Control:
+              schema: {type: string, example: no-store}
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '307':
+          $ref: '#/components/responses/LeaderRedirect'
+        '400':
+          $ref: '#/components/responses/InvalidCommand'
+        '404':
+          description: Key does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example: {error: key not found}
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+        '500':
+          $ref: '#/components/responses/Failed'
+    delete:
+      tags: [KV]
+      operationId: deleteValue
+      summary: Delete a key
+      description: Deleting an absent key is successful.
+      responses:
+        '200':
+          $ref: '#/components/responses/Applied'
+        '307':
+          $ref: '#/components/responses/LeaderRedirect'
+        '400':
+          $ref: '#/components/responses/InvalidCommand'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+        '500':
+          $ref: '#/components/responses/Failed'
+  /v1/status:
+    get:
+      tags: [Node]
+      operationId: getNodeStatus
+      summary: Inspect the contacted node
+      description: Diagnostic local state, not a linearizable cluster snapshot.
+      responses:
+        '200':
+          description: Local node and application progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+              example:
+                id: node1
+                role: leader
+                term: 2
+                leader_id: node1
+                last_log_index: 8
+                commit_index: 8
+                applied_index: 8
+                available: true
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+    Applied:
+      type: object
+      required: [index]
+      properties:
+        index:
+          type: integer
+          minimum: 1
+          description: Applied Raft log index (including service no-op entries)
+    Status:
+      type: object
+      required: [id, role, term, leader_id, last_log_index, commit_index, applied_index, available]
+      properties:
+        id: {type: string}
+        role: {type: string, enum: [follower, candidate, leader]}
+        term: {type: integer, minimum: 0}
+        leader_id:
+          type: string
+          description: Empty when no leader is known
+        last_log_index: {type: integer, minimum: 0}
+        commit_index: {type: integer, minimum: 0}
+        applied_index: {type: integer, minimum: 0}
+        available:
+          type: boolean
+          description: The local apply loop is running; quorum availability is not implied
+  responses:
+    Applied:
+      description: Command committed by a majority and applied locally
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Applied'
+          example: {index: 8}
+    LeaderRedirect:
+      description: Repeat the same method and body at the leader URL
+      headers:
+        Location:
+          required: true
+          schema: {type: string, format: uri}
+          example: http://localhost:18002/v1/kv/greeting
+        Cache-Control:
+          schema: {type: string, example: no-store}
+    InvalidCommand:
+      description: Invalid key or command
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: Leader unknown, leader URL missing, or store unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: {error: leader unavailable; try again later}
+    Timeout:
+      description: Request timed out; a write may still commit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: {error: request timed out; a write may still commit}
+    Failed:
+      description: Internal failure; a write may still commit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

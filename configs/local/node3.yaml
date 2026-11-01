@@ -1,8 +1,18 @@
-id: node3
-listen: :19003
-peers:
-  node1: 127.0.0.1:19001
-  node2: 127.0.0.1:19002
-log_format: plain
-log_level: debug
-data_dir: data/node3
+http:
+  listen_address: :18003
+  node_urls:
+    node1: http://localhost:18001
+    node2: http://localhost:18002
+    node3: http://localhost:18003
+
+raft:
+  node_id: node3
+  listen_address: :19003
+  peers:
+    node1: 127.0.0.1:19001
+    node2: 127.0.0.1:19002
+  data_dir: data/node3
+
+log:
+  format: plain
+  level: debug

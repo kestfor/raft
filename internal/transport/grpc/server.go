@@ -23,8 +23,12 @@ type service struct {
 func (s *service) GetStatus(context.Context, *raftpb.GetStatusRequest) (*raftpb.GetStatusResponse, error) {
 	state := s.handler.Status()
 	return &raftpb.GetStatusResponse{
-		Id: string(state.ID), Role: string(state.Role), Term: state.Term, LeaderId: string(state.LeaderID),
-		LastLogIndex: state.LastLogIndex, CommitIndex: state.CommitIndex,
+		Id:           string(state.ID),
+		Role:         string(state.Role),
+		Term:         state.Term,
+		LeaderId:     string(state.LeaderID),
+		LastLogIndex: state.LastLogIndex,
+		CommitIndex:  state.CommitIndex,
 	}, nil
 }
 
@@ -35,8 +39,10 @@ func (s *service) RequestVote(
 	response, err := s.handler.RequestVote(
 		ctx,
 		raft.RequestVoteRequest{
-			Term: req.GetTerm(), CandidateID: raft.NodeID(req.GetCandidateId()),
-			LastLogIndex: req.GetLastLogIndex(), LastLogTerm: req.GetLastLogTerm(),
+			Term:         req.GetTerm(),
+			CandidateID:  raft.NodeID(req.GetCandidateId()),
+			LastLogIndex: req.GetLastLogIndex(),
+			LastLogTerm:  req.GetLastLogTerm(),
 		},
 	)
 	if err != nil {
@@ -53,9 +59,12 @@ func (s *service) AppendEntries(
 	response, err := s.handler.AppendEntries(
 		ctx,
 		raft.AppendEntriesRequest{
-			Term: req.GetTerm(), LeaderID: raft.NodeID(req.GetLeaderId()),
-			PrevLogIndex: req.GetPrevLogIndex(), PrevLogTerm: req.GetPrevLogTerm(),
-			Entries: entriesFromProto(req.GetEntries()), LeaderCommit: req.GetLeaderCommit(),
+			Term:         req.GetTerm(),
+			LeaderID:     raft.NodeID(req.GetLeaderId()),
+			PrevLogIndex: req.GetPrevLogIndex(),
+			PrevLogTerm:  req.GetPrevLogTerm(),
+			Entries:      entriesFromProto(req.GetEntries()),
+			LeaderCommit: req.GetLeaderCommit(),
 		},
 	)
 	if err != nil {

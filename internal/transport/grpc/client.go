@@ -86,8 +86,10 @@ func (c *Client) RequestVote(
 
 	response, err := raftpb.NewRaftServiceClient(conn).
 		RequestVote(ctx, &raftpb.RequestVoteRequest{
-			Term: req.Term, CandidateId: string(req.CandidateID),
-			LastLogIndex: req.LastLogIndex, LastLogTerm: req.LastLogTerm,
+			Term:         req.Term,
+			CandidateId:  string(req.CandidateID),
+			LastLogIndex: req.LastLogIndex,
+			LastLogTerm:  req.LastLogTerm,
 		})
 	if err != nil {
 		return raft.RequestVoteResponse{}, fmt.Errorf("request vote from %q: %w", to, err)
@@ -108,8 +110,12 @@ func (c *Client) AppendEntries(
 
 	response, err := raftpb.NewRaftServiceClient(conn).
 		AppendEntries(ctx, &raftpb.AppendEntriesRequest{
-			Term: req.Term, LeaderId: string(req.LeaderID), PrevLogIndex: req.PrevLogIndex,
-			PrevLogTerm: req.PrevLogTerm, Entries: entriesToProto(req.Entries), LeaderCommit: req.LeaderCommit,
+			Term:         req.Term,
+			LeaderId:     string(req.LeaderID),
+			PrevLogIndex: req.PrevLogIndex,
+			PrevLogTerm:  req.PrevLogTerm,
+			Entries:      entriesToProto(req.Entries),
+			LeaderCommit: req.LeaderCommit,
 		})
 	if err != nil {
 		return raft.AppendEntriesResponse{}, fmt.Errorf("append entries to %q: %w", to, err)

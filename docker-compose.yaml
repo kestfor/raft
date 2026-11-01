@@ -6,8 +6,8 @@ x-node: &node
   command: ["--config=/etc/raft/config.yaml"]
   environment:
     CLICOLOR_FORCE: ${CLICOLOR_FORCE:-1}
-    RAFT_LOG_FORMAT: ${RAFT_LOG_FORMAT:-plain}
-    RAFT_LOG_LEVEL: ${RAFT_LOG_LEVEL:-debug}
+    LOG_FORMAT: ${LOG_FORMAT:-plain}
+    LOG_LEVEL: ${LOG_LEVEL:-debug}
   healthcheck:
     test: ["CMD", "/grpc_health_probe", "-addr=127.0.0.1:9000", "-connect-timeout=500ms", "-rpc-timeout=500ms"]
     interval: 5s
@@ -23,6 +23,7 @@ services:
       - node1-data:/var/lib/raft
     ports:
       - "9001:9000"
+      - "18001:18000"
   node2:
     <<: *node
     volumes:
@@ -30,6 +31,7 @@ services:
       - node2-data:/var/lib/raft
     ports:
       - "9002:9000"
+      - "18002:18000"
   node3:
     <<: *node
     volumes:
@@ -37,6 +39,7 @@ services:
       - node3-data:/var/lib/raft
     ports:
       - "9003:9000"
+      - "18003:18000"
 
 volumes:
   node1-data:

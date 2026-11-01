@@ -9,7 +9,7 @@ import (
 
 const (
 	MaxCommandSize   = 1 << 20
-	maxAppendEntries = 64
+	maxAppendEntries = 256
 	maxAppendBytes   = 1 << 20
 )
 
@@ -144,7 +144,8 @@ func (n *Node) replicatePeer(ctx context.Context, peer NodeID) {
 		LeaderCommit: n.log.commitIndex,
 	}
 
-	n.startRPC(ctx, peer, func() { n.sendAppendEntries(ctx, peer, req) })
+	readRound := n.log.readRound
+	n.startRPC(ctx, peer, func() { n.sendAppendEntries(ctx, peer, req, readRound) })
 }
 
 func (n *Node) handleAppendResponse(

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -17,35 +18,25 @@ import (
 )
 
 type Config struct {
-	ID                 string            `yaml:"id"           env:"RAFT_ID"`
-	DataDir            string            `yaml:"data_dir"     env:"RAFT_DATA_DIR"`
-	ListenAddress      string            `yaml:"listen"       env:"RAFT_LISTEN"`
-	Peers              map[string]string `yaml:"peers"        env:"RAFT_PEERS"        envKeyValSeparator:"="`
-	ElectionTimeoutMin time.Duration     `yaml:"election_min" env:"RAFT_ELECTION_MIN"`
-	ElectionTimeoutMax time.Duration     `yaml:"election_max" env:"RAFT_ELECTION_MAX"`
-	HeartbeatInterval  time.Duration     `yaml:"heartbeat"    env:"RAFT_HEARTBEAT"`
-	RPCTimeout         time.Duration     `yaml:"rpc_timeout"  env:"RAFT_RPC_TIMEOUT"`
-	LogLevel           slog.Level        `yaml:"log_level"    env:"RAFT_LOG_LEVEL"`
-	LogFormat          string            `yaml:"log_format"   env:"RAFT_LOG_FORMAT"`
+	HTTP HTTPConfig `yaml:"http" envPrefix:"HTTP_"`
+	Raft RaftConfig `yaml:"raft" envPrefix:"RAFT_"`
+	Log  LogConfig  `yaml:"log"  envPrefix:"LOG_"`
 }
-
-const (
-	LogFormatJSON  = "json"
-	LogFormatPlain = "plain"
-)
 
 func Default() Config {
 	timings := raft.DefaultConfig("", nil)
 
 	return Config{
-		ListenAddress:      ":9000",
-		DataDir:            "data",
-		ElectionTimeoutMin: timings.ElectionTimeoutMin,
-		ElectionTimeoutMax: timings.ElectionTimeoutMax,
-		HeartbeatInterval:  timings.HeartbeatInterval,
-		RPCTimeout:         timings.RPCTimeout,
-		LogLevel:           slog.LevelInfo,
-		LogFormat:          LogFormatJSON,
+		HTTP: HTTPConfig{ListenAddress: ":18000"},
+		Raft: RaftConfig{
+			ListenAddress:      ":9000",
+			DataDir:            "data",
+			ElectionTimeoutMin: timings.ElectionTimeoutMin,
+			ElectionTimeoutMax: timings.ElectionTimeoutMax,
+			HeartbeatInterval:  timings.HeartbeatInterval,
+			RPCTimeout:         timings.RPCTimeout,
+		},
+		Log: LogConfig{Level: slog.LevelInfo, Format: LogFormatJSON},
 	}
 }
 
@@ -93,37 +84,86 @@ func (c *Config) readYAML(path string) error {
 }
 
 func (c Config) Validate() error {
-	if strings.TrimSpace(c.DataDir) == "" {
-		return fmt.Errorf("data directory must not be empty")
+	if err := c.HTTP.validate(); err != nil {
+		return fmt.Errorf("http: %w", err)
 	}
 
-	if c.LogFormat != LogFormatJSON && c.LogFormat != LogFormatPlain {
-		return fmt.Errorf("invalid log format %q: expected json or plain", c.LogFormat)
+	if err := c.Raft.validate(); err != nil {
+		return fmt.Errorf("raft: %w", err)
 	}
 
-	if c.ID == "" || strings.TrimSpace(c.ID) != c.ID {
-		return fmt.Errorf("id must be non-empty and have no surrounding whitespace")
+	if err := c.Log.validate(); err != nil {
+		return fmt.Errorf("log: %w", err)
 	}
 
+	return nil
+}
+
+// HTTPConfig describes the client-facing API. NodeURLs must be reachable by
+// clients: they are redirect destinations, not inter-node transport addresses.
+type HTTPConfig struct {
+	ListenAddress string            `yaml:"listen_address" env:"LISTEN_ADDRESS"`
+	NodeURLs      map[string]string `yaml:"node_urls"      env:"NODE_URLS"      envKeyValSeparator:"="`
+}
+
+func (c HTTPConfig) validate() error {
 	if _, _, err := net.SplitHostPort(c.ListenAddress); err != nil {
-		return fmt.Errorf("invalid listen address: %w", err)
+		return fmt.Errorf("listen_address: %w", err)
 	}
 
-	for id, address := range c.Peers {
-		if id == "" || strings.TrimSpace(id) != id || id == c.ID {
-			return fmt.Errorf("invalid peer ID %q: expected another node's ID", id)
-		}
-
-		host, _, err := net.SplitHostPort(address)
-		if err != nil || host == "" {
-			return fmt.Errorf("invalid address for peer %q: %q", id, address)
+	for id, address := range c.NodeURLs {
+		u, err := url.Parse(address)
+		if id == "" || strings.TrimSpace(id) != id || err != nil || u.Host == "" ||
+			(u.Scheme != "http" && u.Scheme != "https") || u.User != nil ||
+			u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			return fmt.Errorf("node_urls: invalid public HTTP origin for node %q: %q", id, address)
 		}
 	}
 
 	return nil
 }
 
-func (c Config) RaftConfig() raft.Config {
+// RaftConfig describes node identity, durable storage and inter-node transport.
+type RaftConfig struct {
+	NodeID        string            `yaml:"node_id"        env:"NODE_ID"`
+	ListenAddress string            `yaml:"listen_address" env:"LISTEN_ADDRESS"`
+	Peers         map[string]string `yaml:"peers"          env:"PEERS"          envKeyValSeparator:"="`
+	DataDir       string            `yaml:"data_dir"       env:"DATA_DIR"`
+
+	ElectionTimeoutMin time.Duration `yaml:"election_timeout_min" env:"ELECTION_TIMEOUT_MIN"`
+	ElectionTimeoutMax time.Duration `yaml:"election_timeout_max" env:"ELECTION_TIMEOUT_MAX"`
+	HeartbeatInterval  time.Duration `yaml:"heartbeat_interval"   env:"HEARTBEAT_INTERVAL"`
+	RPCTimeout         time.Duration `yaml:"rpc_timeout"          env:"RPC_TIMEOUT"`
+}
+
+func (c RaftConfig) validate() error {
+	if strings.TrimSpace(c.DataDir) == "" {
+		return fmt.Errorf("data_dir must not be empty")
+	}
+
+	if c.NodeID == "" || strings.TrimSpace(c.NodeID) != c.NodeID {
+		return fmt.Errorf("node_id must be non-empty and have no surrounding whitespace")
+	}
+
+	if _, _, err := net.SplitHostPort(c.ListenAddress); err != nil {
+		return fmt.Errorf("listen_address: %w", err)
+	}
+
+	for id, address := range c.Peers {
+		if id == "" || strings.TrimSpace(id) != id || id == c.NodeID {
+			return fmt.Errorf("peers: invalid node ID %q: expected another node's ID", id)
+		}
+
+		host, _, err := net.SplitHostPort(address)
+		if err != nil || host == "" {
+			return fmt.Errorf("peers: invalid address for node %q: %q", id, address)
+		}
+	}
+
+	return nil
+}
+
+func (c RaftConfig) NodeConfig() raft.Config {
 	peers := make([]raft.NodeID, 0, len(c.Peers))
 	for id := range c.Peers {
 		peers = append(peers, raft.NodeID(id))
@@ -132,7 +172,8 @@ func (c Config) RaftConfig() raft.Config {
 	slices.Sort(peers)
 
 	return raft.Config{
-		ID: raft.NodeID(c.ID), Peers: peers,
+		ID:                 raft.NodeID(c.NodeID),
+		Peers:              peers,
 		ElectionTimeoutMin: c.ElectionTimeoutMin,
 		ElectionTimeoutMax: c.ElectionTimeoutMax,
 		HeartbeatInterval:  c.HeartbeatInterval,
@@ -140,11 +181,29 @@ func (c Config) RaftConfig() raft.Config {
 	}
 }
 
-func (c Config) PeerAddresses() map[raft.NodeID]string {
+func (c RaftConfig) PeerAddresses() map[raft.NodeID]string {
 	addresses := make(map[raft.NodeID]string, len(c.Peers))
 	for id, address := range c.Peers {
 		addresses[raft.NodeID(id)] = address
 	}
 
 	return addresses
+}
+
+const (
+	LogFormatJSON  = "json"
+	LogFormatPlain = "plain"
+)
+
+type LogConfig struct {
+	Level  slog.Level `yaml:"level"  env:"LEVEL"`
+	Format string     `yaml:"format" env:"FORMAT"`
+}
+
+func (c LogConfig) validate() error {
+	if c.Format != LogFormatJSON && c.Format != LogFormatPlain {
+		return fmt.Errorf("invalid format %q: expected json or plain", c.Format)
+	}
+
+	return nil
 }

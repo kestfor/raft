@@ -12,5 +12,5 @@ COPY --from=build --chown=65532:65532 /raft-data /var/lib/raft
 COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.38 /ko-app/grpc-health-probe /grpc_health_probe
 USER 65532:65532
 WORKDIR /var/lib/raft
-EXPOSE 9000
+EXPOSE 9000 18000
 ENTRYPOINT ["/raftnode"]

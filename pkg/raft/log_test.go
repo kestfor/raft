@@ -57,6 +57,57 @@ func TestAppendEntriesConsistencyAndCommit(t *testing.T) {
 	}
 }
 
+func TestLargeAppendBatchSurvivesWALRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raft.wal")
+	journal, err := wal.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = journal.Close() }()
+
+	n, _ := newElectionTestNode(t, "a", []NodeID{"b"})
+	n.config.Storage = journal
+	entries := make([]Entry, maxAppendEntries)
+	for i := range entries {
+		entries[i] = Entry{Index: uint64(i + 1), Term: 1, Data: []byte{byte(i)}}
+	}
+
+	response := appendEntries(t, n, AppendEntriesRequest{
+		Term: 1, LeaderID: "b", Entries: entries, LeaderCommit: uint64(len(entries)),
+	})
+	if !response.Success || n.Status().CommitIndex != uint64(len(entries)) {
+		t.Fatalf("full batch rejected: %+v", response)
+	}
+
+	oversized := append(cloneEntries(entries), Entry{Index: uint64(len(entries) + 1), Term: 1})
+	if _, err := n.AppendEntries(t.Context(), AppendEntriesRequest{
+		Term: 1, LeaderID: "b", Entries: oversized,
+	}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("accepted oversized batch: %v", err)
+	}
+
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := wal.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = reopened.Close() }()
+	n.config.Storage = reopened
+	restored, err := NewNode(n.config, &slowTransport{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(restored.log.entries[1:], entries) || restored.election.currentTerm != 1 {
+		t.Fatal("large durable batch did not survive restart")
+	}
+}
+
 func TestAppendEntriesRejectsInvalidAndCommittedConflicts(t *testing.T) {
 	for _, req := range []AppendEntriesRequest{
 		{PrevLogIndex: 1},
@@ -224,14 +275,32 @@ func TestLaggingFollowerCatchesUpAcrossBatches(t *testing.T) {
 			last = propose(t, network.nodes["a"], string(bytes.Repeat([]byte{0xff}, MaxCommandSize)))
 		}
 
+		network.nodes["a"].mu.Lock()
+		committed := cloneEntries(network.nodes["a"].log.entries)
+		network.nodes["a"].mu.Unlock()
+
 		network.mu.Lock()
 		network.isolated = ""
 		network.mu.Unlock()
-		time.Sleep(50 * time.Millisecond)
+
+		// Building several large batches can outlast the isolated follower's
+		// election timeout. Rejoining may cause a new term and another no-op;
+		// wait for convergence without assuming the original leader survives.
+		waitUntil(t, func() bool {
+			state := network.nodes["a"].Status()
+			for _, n := range network.nodes {
+				s := n.Status()
+				if s.CommitIndex < last || s.CommitIndex != state.CommitIndex || s.LastLogIndex != state.LastLogIndex {
+					return false
+				}
+			}
+
+			return true
+		})
 		synctest.Wait()
 		for id, n := range network.nodes {
-			if s := n.Status(); s.CommitIndex != last || s.LastLogIndex != last {
-				t.Fatalf("node %s: %+v", id, s)
+			if !reflect.DeepEqual(n.log.entries[:last+1], committed) {
+				t.Fatalf("node %s lost the committed prefix", id)
 			}
 		}
 
