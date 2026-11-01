@@ -108,7 +108,11 @@ func TestHigherTermInEveryRPCStepsDown(t *testing.T) {
 		{"stale vote response", func(t *testing.T, node *Node, ctx context.Context) {
 			node.handleVoteResponse(ctx, "b", 1, RequestVoteResponse{Term: 5})
 		}},
-		{"stale append response", func(t *testing.T, node *Node, ctx context.Context) { node.advanceTerm(ctx, 5) }},
+		{"stale append response", func(t *testing.T, node *Node, ctx context.Context) {
+			if err := node.advanceTerm(ctx, 5); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -203,6 +207,9 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 		from, to          NodeID
 		term, requestTerm uint64
 		granted           bool
+		voteReq           RequestVoteRequest
+		appendReq         AppendEntriesRequest
+		success           bool
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // The simulation delivers outgoing messages explicitly.
@@ -227,12 +234,31 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 				if node.election.role == Candidate && !node.election.votes.Contains(peer) {
 					queue = append(
 						queue,
-						message{kind: voteRequest, from: node.config.ID, to: peer, term: node.election.currentTerm},
+						message{
+							kind: voteRequest, from: node.config.ID, to: peer, term: node.election.currentTerm,
+							voteReq: RequestVoteRequest{
+								Term: node.election.currentTerm, CandidateID: node.config.ID,
+								LastLogIndex: node.lastIndex(), LastLogTerm: node.log.entries[node.lastIndex()].Term,
+							},
+						},
 					)
 				} else if node.election.role == Leader {
+					next := node.log.nextIndex[peer]
 					queue = append(
 						queue,
-						message{kind: appendRequest, from: node.config.ID, to: peer, term: node.election.currentTerm},
+						message{
+							kind: appendRequest, from: node.config.ID, to: peer, term: node.election.currentTerm,
+							appendReq: AppendEntriesRequest{
+								Term:         node.election.currentTerm,
+								LeaderID:     node.config.ID,
+								PrevLogIndex: next - 1,
+								PrevLogTerm:  node.log.entries[next-1].Term,
+								Entries: cloneEntries(
+									node.log.entries[next:min(node.lastIndex()+1, next+maxAppendEntries)],
+								),
+								LeaderCommit: node.log.commitIndex,
+							},
+						},
 					)
 				}
 			}
@@ -267,7 +293,7 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 			case broadcastTick:
 				sendRPCs(node)
 			case voteRequest:
-				response := requestVote(t, node, RequestVoteRequest{Term: msg.term, CandidateID: msg.from})
+				response := requestVote(t, node, msg.voteReq)
 				queue = append(
 					queue,
 					message{
@@ -280,10 +306,13 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 					},
 				)
 			case appendRequest:
-				response := appendEntries(t, node, AppendEntriesRequest{Term: msg.term, LeaderID: msg.from})
+				response := appendEntries(t, node, msg.appendReq)
 				queue = append(
 					queue,
-					message{kind: appendResponse, from: node.config.ID, to: msg.from, term: response.Term},
+					message{
+						kind: appendResponse, from: node.config.ID, to: msg.from, term: response.Term,
+						appendReq: msg.appendReq, success: response.Success,
+					},
 				)
 			case voteResponse:
 				node.handleVoteResponse(
@@ -296,7 +325,12 @@ func TestElectionSafetyUnderMessageDisorder(t *testing.T) {
 					sendRPCs(node)
 				}
 			case appendResponse:
-				node.advanceTerm(ctx, msg.term)
+				node.handleAppendResponse(
+					ctx,
+					msg.from,
+					msg.appendReq,
+					AppendEntriesResponse{Term: msg.term, Success: msg.success},
+				)
 			}
 
 			if node.election.currentTerm < oldTerm {

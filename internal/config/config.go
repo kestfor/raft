@@ -18,6 +18,7 @@ import (
 
 type Config struct {
 	ID                 string            `yaml:"id"           env:"RAFT_ID"`
+	DataDir            string            `yaml:"data_dir"     env:"RAFT_DATA_DIR"`
 	ListenAddress      string            `yaml:"listen"       env:"RAFT_LISTEN"`
 	Peers              map[string]string `yaml:"peers"        env:"RAFT_PEERS"        envKeyValSeparator:"="`
 	ElectionTimeoutMin time.Duration     `yaml:"election_min" env:"RAFT_ELECTION_MIN"`
@@ -38,6 +39,7 @@ func Default() Config {
 
 	return Config{
 		ListenAddress:      ":9000",
+		DataDir:            "data",
 		ElectionTimeoutMin: timings.ElectionTimeoutMin,
 		ElectionTimeoutMax: timings.ElectionTimeoutMax,
 		HeartbeatInterval:  timings.HeartbeatInterval,
@@ -69,7 +71,7 @@ func (c *Config) readYAML(path string) error {
 	if err != nil {
 		return fmt.Errorf("open config: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
@@ -90,6 +92,9 @@ func (c *Config) readYAML(path string) error {
 }
 
 func (c Config) Validate() error {
+	if strings.TrimSpace(c.DataDir) == "" {
+		return fmt.Errorf("data directory must not be empty")
+	}
 	if c.LogFormat != LogFormatJSON && c.LogFormat != LogFormatPlain {
 		return fmt.Errorf("invalid log format %q: expected json or plain", c.LogFormat)
 	}

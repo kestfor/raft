@@ -20,17 +20,25 @@ services:
     <<: *node
     volumes:
       - ./configs/compose/node1.yaml:/etc/raft/config.yaml:ro
+      - node1-data:/var/lib/raft
     ports:
       - "9001:9000"
   node2:
     <<: *node
     volumes:
       - ./configs/compose/node2.yaml:/etc/raft/config.yaml:ro
+      - node2-data:/var/lib/raft
     ports:
       - "9002:9000"
   node3:
     <<: *node
     volumes:
       - ./configs/compose/node3.yaml:/etc/raft/config.yaml:ro
+      - node3-data:/var/lib/raft
     ports:
       - "9003:9000"
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:

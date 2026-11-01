@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -23,6 +24,11 @@ type handlerStub struct {
 	requestVote   func(context.Context, raft.RequestVoteRequest) (raft.RequestVoteResponse, error)
 	appendEntries func(context.Context, raft.AppendEntriesRequest) (raft.AppendEntriesResponse, error)
 	status        raft.Status
+	propose       func(context.Context, []byte) (uint64, error)
+}
+
+func (h handlerStub) Propose(ctx context.Context, data []byte) (uint64, error) {
+	return h.propose(ctx, data)
 }
 
 func (h handlerStub) Status() raft.Status { return h.status }
@@ -69,8 +75,15 @@ func testClient(t *testing.T, handler Handler) *Client {
 }
 
 func TestProtocolModelsRoundTrip(t *testing.T) {
-	wantVote := raft.RequestVoteRequest{Term: 17, CandidateID: "a"}
-	wantAppend := raft.AppendEntriesRequest{Term: 19, LeaderID: "c"}
+	wantVote := raft.RequestVoteRequest{Term: 17, CandidateID: "a", LastLogIndex: 10, LastLogTerm: 12}
+	wantAppend := raft.AppendEntriesRequest{
+		Term:         19,
+		LeaderID:     "c",
+		PrevLogIndex: 8,
+		PrevLogTerm:  13,
+		LeaderCommit: 8,
+		Entries:      []raft.Entry{{Index: 9, Term: 19, Data: []byte{0, 1, 255}}, {Index: 10, Term: 19, NoOp: true}},
+	}
 	client := testClient(t, handlerStub{
 		requestVote: func(_ context.Context, req raft.RequestVoteRequest) (raft.RequestVoteResponse, error) {
 			if req != wantVote {
@@ -80,7 +93,7 @@ func TestProtocolModelsRoundTrip(t *testing.T) {
 			return raft.RequestVoteResponse{Term: 18, VoteGranted: true}, nil
 		},
 		appendEntries: func(_ context.Context, req raft.AppendEntriesRequest) (raft.AppendEntriesResponse, error) {
-			if req != wantAppend {
+			if !reflect.DeepEqual(req, wantAppend) {
 				t.Errorf("append request = %+v, want %+v", req, wantAppend)
 			}
 
@@ -106,7 +119,7 @@ func TestProtocolModelsRoundTrip(t *testing.T) {
 }
 
 func TestGetStatusReturnsCurrentNodeState(t *testing.T) {
-	want := raft.Status{ID: "b", Role: raft.Leader, Term: 7, LeaderID: "b"}
+	want := raft.Status{ID: "b", Role: raft.Leader, Term: 7, LeaderID: "b", LastLogIndex: 13, CommitIndex: 11}
 	client := testClient(t, handlerStub{status: want})
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -116,7 +129,7 @@ func TestGetStatusReturnsCurrentNodeState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.GetId() != string(want.ID) || response.GetRole() != string(want.Role) ||
-		response.GetTerm() != want.Term || response.GetLeaderId() != string(want.LeaderID) {
+		response.GetTerm() != want.Term || response.GetLeaderId() != string(want.LeaderID) || response.GetLastLogIndex() != want.LastLogIndex || response.GetCommitIndex() != want.CommitIndex {
 		t.Fatalf("status = %+v, want %+v", response, want)
 	}
 }
@@ -128,6 +141,8 @@ func TestHandlerErrorsBecomeGRPCStatus(t *testing.T) {
 	}{
 		{fmt.Errorf("details: %w", raft.ErrInvalidRequest), codes.InvalidArgument},
 		{raft.ErrNotRunning, codes.Unavailable},
+		{raft.ErrNotLeader, codes.FailedPrecondition},
+		{raft.ErrLeadershipLost, codes.FailedPrecondition},
 		{context.Canceled, codes.Canceled},
 		{context.DeadlineExceeded, codes.DeadlineExceeded},
 		{errors.New("internal details"), codes.Internal},
@@ -273,6 +288,22 @@ func TestThreeNodeGRPCElectionAndFailover(t *testing.T) {
 	}
 
 	leader := waitForClusterLeader(t, members)
+	proposeTo := func(id raft.NodeID, data []byte) uint64 {
+		t.Helper()
+		client := testClient(t, members[id].node)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		response, err := raftpb.NewRaftServiceClient(client.connections["b"]).
+			Propose(ctx, &raftpb.ProposeRequest{Data: data})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response.GetIndex()
+	}
+	first := proposeTo(leader, []byte("before failover"))
+	if first < 2 || members[leader].node.Status().CommitIndex < first {
+		t.Fatal("proposal was not committed")
+	}
 	oldTerm := members[leader].node.Status().Term
 	members[leader].active = false
 	members[leader].cancel()
@@ -281,6 +312,9 @@ func TestThreeNodeGRPCElectionAndFailover(t *testing.T) {
 	replacement := waitForClusterLeader(t, members)
 	if replacement == leader || members[replacement].node.Status().Term <= oldTerm {
 		t.Fatalf("invalid replacement %s after leader %s in term %d", replacement, leader, oldTerm)
+	}
+	if next := proposeTo(replacement, []byte("after failover")); next <= first {
+		t.Fatal("new leader lost committed prefix")
 	}
 }
 

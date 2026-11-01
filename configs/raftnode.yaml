@@ -8,3 +8,4 @@ heartbeat: 100ms
 rpc_timeout: 200ms
 log_level: info
 log_format: json
+data_dir: data

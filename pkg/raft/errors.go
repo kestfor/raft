@@ -7,4 +7,6 @@ var (
 	ErrAlreadyStarted = errors.New("raft: node can only run once")
 	ErrInvalidRequest = errors.New("raft: invalid request")
 	ErrTermExhausted  = errors.New("raft: term counter exhausted")
+	ErrNotLeader      = errors.New("raft: node is not the leader")
+	ErrLeadershipLost = errors.New("raft: leadership lost before commitment was confirmed")
 )

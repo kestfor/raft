@@ -13,7 +13,7 @@ import (
 
 func clearEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"RAFT_ID", "RAFT_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
+	for _, name := range []string{"RAFT_DATA_DIR", "RAFT_ID", "RAFT_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
 		t.Setenv(name, "")
 	}
 }
@@ -48,8 +48,9 @@ election_min: 800ms
 	}
 
 	core := cfg.RaftConfig()
-	if cfg.ID != "NodeA" || cfg.LogLevel != slog.LevelDebug || cfg.LogFormat != LogFormatPlain || core.ElectionTimeoutMin != 800*time.Millisecond ||
-		core.ElectionTimeoutMax != 10*time.Second {
+	if cfg.ID != "NodeA" || cfg.LogLevel != slog.LevelDebug || cfg.LogFormat != LogFormatPlain ||
+		core.ElectionTimeoutMin != 800*time.Millisecond ||
+		core.ElectionTimeoutMax != Default().ElectionTimeoutMax {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 
@@ -61,6 +62,7 @@ election_min: 800ms
 func TestEnvironmentOverridesYAML(t *testing.T) {
 	clearEnvironment(t)
 	values := map[string]string{
+		"RAFT_DATA_DIR":     "env-data",
 		"RAFT_ID":           "env-node",
 		"RAFT_LISTEN":       "127.0.0.1:9100",
 		"RAFT_PEERS":        "NodeC=[::1]:9102,NodeB=localhost:9101",
@@ -86,7 +88,7 @@ log_format: plain
 	}
 
 	want := Config{
-		ID: "env-node", ListenAddress: "127.0.0.1:9100",
+		DataDir: "env-data", ID: "env-node", ListenAddress: "127.0.0.1:9100",
 		Peers:              map[string]string{"NodeB": "localhost:9101", "NodeC": "[::1]:9102"},
 		ElectionTimeoutMin: 900 * time.Millisecond, ElectionTimeoutMax: 2 * time.Second,
 		HeartbeatInterval: 150 * time.Millisecond, RPCTimeout: 300 * time.Millisecond, LogLevel: slog.LevelInfo,
@@ -101,7 +103,8 @@ func TestLoadWithoutFile(t *testing.T) {
 	clearEnvironment(t)
 	t.Setenv("RAFT_ID", "a")
 	cfg, err := Load("")
-	if err != nil || cfg.ID != "a" || cfg.ListenAddress != ":9000" || cfg.LogFormat != LogFormatJSON || cfg.ElectionTimeoutMin != 5*time.Second {
+	if err != nil || cfg.ID != "a" || cfg.ListenAddress != ":9000" || cfg.LogFormat != LogFormatJSON ||
+		cfg.ElectionTimeoutMin != Default().ElectionTimeoutMin {
 		t.Fatalf("config = %+v, error = %v", cfg, err)
 	}
 }
@@ -143,14 +146,15 @@ func TestLoadRejectsInvalidEnvironment(t *testing.T) {
 
 func TestValidateDeploymentSettings(t *testing.T) {
 	for name, change := range map[string]func(*Config){
-		"empty ID":          func(c *Config) { c.ID = "" },
-		"whitespace ID":     func(c *Config) { c.ID = " a" },
-		"bad listen":        func(c *Config) { c.ListenAddress = "invalid" },
-		"self peer":         func(c *Config) { c.Peers = map[string]string{"a": "localhost:9001"} },
-		"empty peer":        func(c *Config) { c.Peers = map[string]string{"": "localhost:9001"} },
-		"missing peer host": func(c *Config) { c.Peers = map[string]string{"b": ":9001"} },
-		"bad peer address":  func(c *Config) { c.Peers = map[string]string{"b": "invalid"} },
-		"bad log format":    func(c *Config) { c.LogFormat = "xml" },
+		"empty data directory": func(c *Config) { c.DataDir = "" },
+		"empty ID":             func(c *Config) { c.ID = "" },
+		"whitespace ID":        func(c *Config) { c.ID = " a" },
+		"bad listen":           func(c *Config) { c.ListenAddress = "invalid" },
+		"self peer":            func(c *Config) { c.Peers = map[string]string{"a": "localhost:9001"} },
+		"empty peer":           func(c *Config) { c.Peers = map[string]string{"": "localhost:9001"} },
+		"missing peer host":    func(c *Config) { c.Peers = map[string]string{"b": ":9001"} },
+		"bad peer address":     func(c *Config) { c.Peers = map[string]string{"b": "invalid"} },
+		"bad log format":       func(c *Config) { c.LogFormat = "xml" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := Default()

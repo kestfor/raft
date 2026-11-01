@@ -47,7 +47,7 @@ func TestClientReconnectsAfterDNSFailureAndRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer client.Close()
+		defer func() { _ = client.Close() }()
 		conn := client.connections["b"]
 
 		for range 2 {
@@ -67,7 +67,7 @@ func TestClientReconnectsAfterDNSFailureAndRestart(t *testing.T) {
 				},
 			})
 			defer server.Stop()
-			defer listener.Close()
+			defer func() { _ = listener.Close() }()
 			go func() {
 				if err := server.Serve(listener); err != nil {
 					t.Errorf("serve: %v", err)
@@ -110,7 +110,7 @@ func TestClientWaitingForConnectionHonorsContext(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					defer client.Close()
+					defer func() { _ = client.Close() }()
 					conn := client.connections["b"]
 					conn.Connect()
 					waitForConnectionState(t, conn, connectivity.TransientFailure)

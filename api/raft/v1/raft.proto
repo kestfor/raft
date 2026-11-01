@@ -4,12 +4,21 @@ package raft.v1;
 
 option go_package = "github.com/kestfor/raft/internal/transport/grpc/raftpb";
 
-// RaftService implements election RPCs. AppendEntries carries heartbeats only
-// until log replication is implemented.
+// RaftService implements elections, log replication, and command submission.
 service RaftService {
   rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc Propose(ProposeRequest) returns (ProposeResponse);
+}
+
+message ProposeRequest {
+  bytes data = 1;
+}
+
+// Success confirms majority commitment, not state machine execution.
+message ProposeResponse {
+  uint64 index = 1;
 }
 
 message GetStatusRequest {}
@@ -19,11 +28,15 @@ message GetStatusResponse {
   string role = 2;
   uint64 term = 3;
   string leader_id = 4;
+  uint64 last_log_index = 5;
+  uint64 commit_index = 6;
 }
 
 message RequestVoteRequest {
   uint64 term = 1;
   string candidate_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
 }
 
 message RequestVoteResponse {
@@ -34,6 +47,17 @@ message RequestVoteResponse {
 message AppendEntriesRequest {
   uint64 term = 1;
   string leader_id = 2;
+  uint64 prev_log_index = 3;
+  uint64 prev_log_term = 4;
+  repeated Entry entries = 5;
+  uint64 leader_commit = 6;
+}
+
+message Entry {
+  uint64 index = 1;
+  uint64 term = 2;
+  bytes data = 3;
+  bool no_op = 4;
 }
 
 message AppendEntriesResponse {

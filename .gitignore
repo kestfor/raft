@@ -1,4 +1,7 @@
-/docs/
+/docs/*
+!/docs/log-replication.md
 /.idea/
 /bin/
 /coverage.out
+
+/data/

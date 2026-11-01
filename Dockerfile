@@ -4,10 +4,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /raftnode ./cmd/raftnode
+RUN mkdir /raft-data
 
 FROM scratch
 COPY --from=build /raftnode /raftnode
+COPY --from=build --chown=65532:65532 /raft-data /var/lib/raft
 COPY --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.38 /ko-app/grpc-health-probe /grpc_health_probe
 USER 65532:65532
+WORKDIR /var/lib/raft
 EXPOSE 9000
 ENTRYPOINT ["/raftnode"]

@@ -17,7 +17,7 @@ import (
 
 func clearEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"RAFT_CONFIG", "RAFT_ID", "RAFT_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
+	for _, name := range []string{"RAFT_CONFIG", "RAFT_DATA_DIR", "RAFT_ID", "RAFT_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
 		t.Setenv(name, "")
 	}
 }
@@ -44,6 +44,7 @@ election_min: 800ms
 `)
 	t.Setenv("RAFT_CONFIG", path)
 	t.Setenv("RAFT_ID", "env-node")
+	t.Setenv("RAFT_DATA_DIR", "from-env")
 	t.Setenv("RAFT_LISTEN", "127.0.0.1:9101")
 	t.Setenv("RAFT_HEARTBEAT", "150ms")
 	var got config.Config
@@ -59,15 +60,24 @@ election_min: 800ms
 
 		return nil
 	})
-	cmd.SetArgs([]string{"--id=flag-node", "--peers=NodeB=[::1]:9202", "--log-level=info", "--log-format=json"})
+	cmd.SetArgs(
+		[]string{
+			"--id=flag-node",
+			"--peers=NodeB=[::1]:9202",
+			"--log-level=info",
+			"--log-format=json",
+			"--data-dir=from-flag",
+		},
+	)
 	if err := cmd.ExecuteContext(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	if !called || got.ID != "flag-node" || got.ListenAddress != "127.0.0.1:9101" || got.LogLevel != slog.LevelInfo ||
+	if !called || got.ID != "flag-node" || got.DataDir != "from-flag" || got.ListenAddress != "127.0.0.1:9101" ||
+		got.LogLevel != slog.LevelInfo ||
 		got.LogFormat != config.LogFormatJSON ||
 		got.ElectionTimeoutMin != 800*time.Millisecond ||
-		got.ElectionTimeoutMax != 10*time.Second ||
+		got.ElectionTimeoutMax != config.Default().ElectionTimeoutMax ||
 		got.HeartbeatInterval != 150*time.Millisecond {
 		t.Fatalf("wrong precedence: %+v", got)
 	}
@@ -108,10 +118,10 @@ log_format: plain
 			"--config",
 			path,
 			"--listen=:9000",
-			"--election-min=5s",
-			"--election-max=10s",
-			"--heartbeat=1s",
-			"--rpc-timeout=2s",
+			"--election-min=500ms",
+			"--election-max=1s",
+			"--heartbeat=100ms",
+			"--rpc-timeout=200ms",
 			"--log-level=info",
 			"--log-format=json",
 		},

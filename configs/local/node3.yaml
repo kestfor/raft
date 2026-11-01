@@ -5,3 +5,4 @@ peers:
   node2: 127.0.0.1:19002
 log_format: plain
 log_level: debug
+data_dir: data/node3

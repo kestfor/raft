@@ -21,8 +21,9 @@ type Node struct {
 
 	transport Transport
 
-	mu       sync.Mutex // protects election and runtime
+	mu       sync.Mutex // protects election, log, and runtime
 	election electionState
+	log      logState
 	runtime  runtimeState
 }
 
@@ -34,6 +35,14 @@ type electionState struct {
 	votes       set.Set[NodeID]
 }
 
+type logState struct {
+	entries     []Entry // Includes an empty entry at index zero.
+	commitIndex uint64
+	nextIndex   map[NodeID]uint64
+	matchIndex  map[NodeID]uint64
+	changed     chan struct{} // Wakes Propose on commit, stepdown, or shutdown.
+}
+
 type runtimeState struct {
 	started          bool
 	running          bool
@@ -41,9 +50,11 @@ type runtimeState struct {
 	electionDeadline time.Time
 	rpcInFlight      set.Set[NodeID]
 	rpcWG            sync.WaitGroup
+	wake             chan struct{} // Requests an RPC round or reports a failure.
+	failure          error
 }
 
-// NewNode starts no goroutines or timers.
+// NewNode replays Storage and starts no goroutines or timers.
 func NewNode(config Config, transport Transport) (*Node, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
@@ -58,13 +69,25 @@ func NewNode(config Config, transport Transport) (*Node, error) {
 		logger = slog.Default()
 	}
 
-	return &Node{
+	config.Peers = slices.Clone(config.Peers)
+	n := &Node{
 		config:    config,
 		transport: transport,
 		logger:    logger.With(slog.String("node", string(config.ID))),
 		election:  electionState{role: Follower},
-		runtime:   runtimeState{rpcInFlight: set.New[NodeID]()},
-	}, nil
+		log: logState{
+			entries: []Entry{{}},
+			changed: make(chan struct{}),
+		},
+		runtime: runtimeState{
+			rpcInFlight: set.New[NodeID](),
+			wake:        make(chan struct{}, 1),
+		},
+	}
+	if err := n.restore(); err != nil {
+		return nil, fmt.Errorf("raft: restore: %w", err)
+	}
+	return n, nil
 }
 
 // Run blocks until ctx is canceled or the protocol cannot continue. Cancellation
@@ -87,6 +110,7 @@ func (n *Node) Run(ctx context.Context) error {
 		n.mu.Lock()
 		n.runtime.running = false
 		n.runtime.electionTimer.Stop()
+		n.notifyLogChange()
 		n.mu.Unlock()
 
 		cancel()
@@ -103,22 +127,23 @@ func (n *Node) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			n.mu.Lock()
+			err := n.runtime.failure
+			n.mu.Unlock()
+			return err
 
 		case <-n.runtime.electionTimer.C:
 			if err := n.handleElectionTimeout(ctx); err != nil {
 				return err
 			}
+			continue
 
+		case <-n.runtime.wake:
 		case <-rpcTicker.C:
-			n.mu.Lock()
-			switch n.election.role {
-			case Candidate:
-				n.requestVotes(ctx)
-			case Leader:
-				n.sendHeartbeats(ctx)
-			}
-			n.mu.Unlock()
+		}
+
+		if err := n.handleRPCTick(ctx); err != nil {
+			return err
 		}
 	}
 }
@@ -138,11 +163,23 @@ func (n *Node) RequestVote(ctx context.Context, req RequestVoteRequest) (Request
 		return RequestVoteResponse{}, err
 	}
 
-	n.advanceTerm(ctx, req.Term)
+	if (req.LastLogIndex == 0) != (req.LastLogTerm == 0) || req.LastLogTerm > req.Term {
+		return RequestVoteResponse{}, fmt.Errorf("%w: invalid last log index or term", ErrInvalidRequest)
+	}
+	if err := n.advanceTerm(ctx, req.Term); err != nil {
+		return RequestVoteResponse{}, err
+	}
 
+	lastTerm := n.log.entries[n.lastIndex()].Term
+	upToDate := req.LastLogTerm > lastTerm || (req.LastLogTerm == lastTerm && req.LastLogIndex >= n.lastIndex())
 	granted := req.Term == n.election.currentTerm &&
-		(n.election.votedFor == "" || n.election.votedFor == req.CandidateID)
+		(n.election.votedFor == "" || n.election.votedFor == req.CandidateID) && upToDate
 	if granted {
+		if n.election.votedFor != req.CandidateID {
+			if err := n.save(req.Term, req.CandidateID, nil); err != nil {
+				return RequestVoteResponse{}, err
+			}
+		}
 		n.election.votedFor = req.CandidateID
 		n.resetElectionTimer()
 	}
@@ -158,39 +195,33 @@ func (n *Node) RequestVote(ctx context.Context, req RequestVoteRequest) (Request
 	return RequestVoteResponse{Term: n.election.currentTerm, VoteGranted: granted}, nil
 }
 
-// AppendEntries currently handles heartbeats only, not log replication.
-func (n *Node) AppendEntries(ctx context.Context, req AppendEntriesRequest) (AppendEntriesResponse, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if err := n.validateRequest(ctx, req.LeaderID, req.Term); err != nil {
-		return AppendEntriesResponse{}, err
-	}
-
-	accepted := req.Term >= n.election.currentTerm
-	if accepted {
-		n.becomeFollower(ctx, req.Term, req.LeaderID)
-	}
-
-	n.logger.DebugContext(ctx, "heartbeat handled",
-		slog.String("leader", string(req.LeaderID)),
-		slog.Uint64("request_term", req.Term),
-		slog.Uint64("current_term", n.election.currentTerm),
-		slog.Bool("accepted", accepted),
-	)
-
-	return AppendEntriesResponse{Term: n.election.currentTerm, Success: accepted}, nil
-}
-
 func (n *Node) handleElectionTimeout(ctx context.Context) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.election.role == Leader || time.Now().Before(n.runtime.electionDeadline) {
+	if !n.runtime.running || n.election.role == Leader || time.Now().Before(n.runtime.electionDeadline) {
 		return nil
 	}
 
 	return n.startElection(ctx)
+}
+
+func (n *Node) handleRPCTick(ctx context.Context) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if n.runtime.failure != nil {
+		return n.runtime.failure
+	}
+
+	switch n.election.role {
+	case Candidate:
+		n.requestVotes(ctx)
+	case Leader:
+		n.replicateAll(ctx)
+	}
+
+	return nil
 }
 
 // State transitions and RPC scheduling below require mu to be held.
@@ -205,6 +236,9 @@ func (n *Node) startElection(ctx context.Context) error {
 
 	previous := n.status()
 
+	if err := n.save(n.election.currentTerm+1, n.config.ID, nil); err != nil {
+		return err
+	}
 	n.election.currentTerm++
 	n.election.role = Candidate
 	n.election.leaderID = ""
@@ -215,18 +249,20 @@ func (n *Node) startElection(ctx context.Context) error {
 	n.logStateChange(ctx, previous, "election_timeout")
 
 	if n.hasQuorum() {
-		n.becomeLeader(ctx)
-	} else {
-		n.requestVotes(ctx)
+		return n.becomeLeader(ctx)
 	}
 
+	n.requestVotes(ctx)
 	return nil
 }
 
-func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) {
+func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) error {
 	previous := n.status()
 
 	if term > n.election.currentTerm {
+		if err := n.save(term, "", nil); err != nil {
+			return err
+		}
 		n.election.currentTerm = term
 		n.election.votedFor = ""
 	}
@@ -235,6 +271,10 @@ func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) {
 	n.election.role = Follower
 	n.election.leaderID = leader
 	n.election.votes = nil
+	n.log.nextIndex, n.log.matchIndex = nil, nil
+	if previous.Role == Leader {
+		n.notifyLogChange()
+	}
 
 	if leader != "" || previous.Role == Leader {
 		n.resetElectionTimer()
@@ -245,11 +285,22 @@ func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) {
 		reason = "higher_term_observed"
 	}
 	n.logStateChange(ctx, previous, reason)
+	return nil
 }
 
-func (n *Node) becomeLeader(ctx context.Context) {
+func (n *Node) becomeLeader(ctx context.Context) error {
 	previous := n.status()
 
+	entry := Entry{Index: n.lastIndex() + 1, Term: n.election.currentTerm, NoOp: true}
+	if err := n.save(n.election.currentTerm, n.election.votedFor, []Entry{entry}); err != nil {
+		return err
+	}
+	n.log.nextIndex = make(map[NodeID]uint64, len(n.config.Peers))
+	n.log.matchIndex = make(map[NodeID]uint64, len(n.config.Peers))
+	for _, peer := range n.config.Peers {
+		n.log.nextIndex[peer] = entry.Index
+	}
+	n.log.entries = append(n.log.entries, entry)
 	n.election.role = Leader
 	n.election.leaderID = n.config.ID
 	n.election.votes = nil
@@ -257,13 +308,16 @@ func (n *Node) becomeLeader(ctx context.Context) {
 	n.runtime.electionTimer.Stop()
 	n.logStateChange(ctx, previous, "majority_reached")
 
-	n.sendHeartbeats(ctx)
+	n.advanceCommit()
+	n.replicateAll(ctx)
+	return nil
 }
 
-func (n *Node) advanceTerm(ctx context.Context, term uint64) {
+func (n *Node) advanceTerm(ctx context.Context, term uint64) error {
 	if term > n.election.currentTerm {
-		n.becomeFollower(ctx, term, "")
+		return n.becomeFollower(ctx, term, "")
 	}
+	return nil
 }
 
 func (n *Node) hasQuorum() bool {
@@ -272,7 +326,9 @@ func (n *Node) hasQuorum() bool {
 
 func (n *Node) handleVoteResponse(ctx context.Context, peer NodeID, requestTerm uint64, response RequestVoteResponse) {
 	// A higher term matters even when this reply belongs to an old election.
-	n.advanceTerm(ctx, response.Term)
+	if err := n.advanceTerm(ctx, response.Term); err != nil {
+		return
+	}
 
 	if n.election.role != Candidate || requestTerm != n.election.currentTerm ||
 		response.Term != n.election.currentTerm ||
@@ -282,12 +338,15 @@ func (n *Node) handleVoteResponse(ctx context.Context, peer NodeID, requestTerm 
 
 	n.election.votes.Add(peer)
 	if n.hasQuorum() {
-		n.becomeLeader(ctx)
+		_ = n.becomeLeader(ctx) // Persistence errors stop Run through fail.
 	}
 }
 
 func (n *Node) requestVotes(ctx context.Context) {
-	req := RequestVoteRequest{Term: n.election.currentTerm, CandidateID: n.config.ID}
+	req := RequestVoteRequest{
+		Term: n.election.currentTerm, CandidateID: n.config.ID,
+		LastLogIndex: n.lastIndex(), LastLogTerm: n.log.entries[n.lastIndex()].Term,
+	}
 
 	for _, peer := range n.config.Peers {
 		if !n.election.votes.Contains(peer) {
@@ -298,11 +357,9 @@ func (n *Node) requestVotes(ctx context.Context) {
 	}
 }
 
-func (n *Node) sendHeartbeats(ctx context.Context) {
-	req := AppendEntriesRequest{Term: n.election.currentTerm, LeaderID: n.config.ID}
-
+func (n *Node) replicateAll(ctx context.Context) {
 	for _, peer := range n.config.Peers {
-		n.startRPC(ctx, peer, func() { n.sendHeartbeat(ctx, peer, req) })
+		n.replicatePeer(ctx, peer)
 	}
 }
 
@@ -343,11 +400,11 @@ func (n *Node) requestVote(ctx context.Context, peer NodeID, req RequestVoteRequ
 	n.handleVoteResponse(ctx, peer, req.Term, response)
 }
 
-func (n *Node) sendHeartbeat(ctx context.Context, peer NodeID, req AppendEntriesRequest) {
+func (n *Node) sendAppendEntries(ctx context.Context, peer NodeID, req AppendEntriesRequest) {
 	rpcCtx, cancel := context.WithTimeout(ctx, n.config.RPCTimeout)
 	defer cancel()
 
-	n.logger.DebugContext(ctx, "sending heartbeat",
+	n.logger.DebugContext(ctx, "sending append entries",
 		slog.String("peer", string(peer)),
 		slog.Uint64("request_term", req.Term),
 	)
@@ -360,7 +417,7 @@ func (n *Node) sendHeartbeat(ctx context.Context, peer NodeID, req AppendEntries
 		return
 	}
 
-	n.advanceTerm(ctx, response.Term)
+	n.handleAppendResponse(ctx, peer, req, response)
 }
 
 // Helpers below require mu to be held.
@@ -390,6 +447,9 @@ func (n *Node) validateRequest(ctx context.Context, senderID NodeID, term uint64
 	}
 
 	if !n.runtime.running {
+		if n.runtime.failure != nil {
+			return n.runtime.failure
+		}
 		return ErrNotRunning
 	}
 
@@ -413,7 +473,27 @@ func (n *Node) randomElectionTimeout() time.Duration {
 }
 
 func (n *Node) status() Status {
-	return Status{ID: n.config.ID, Role: n.election.role, Term: n.election.currentTerm, LeaderID: n.election.leaderID}
+	return Status{
+		ID: n.config.ID, Role: n.election.role, Term: n.election.currentTerm, LeaderID: n.election.leaderID,
+		LastLogIndex: n.lastIndex(), CommitIndex: n.log.commitIndex,
+	}
+}
+
+func (n *Node) wakeRun() {
+	select {
+	case n.runtime.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (n *Node) fail(err error) error {
+	if n.runtime.failure == nil {
+		n.runtime.failure = err
+		n.runtime.running = false
+		n.notifyLogChange()
+		n.wakeRun()
+	}
+	return n.runtime.failure
 }
 
 func (n *Node) logStateChange(ctx context.Context, previous Status, reason string) {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -17,12 +18,14 @@ import (
 	"github.com/kestfor/raft/internal/config"
 	grpctransport "github.com/kestfor/raft/internal/transport/grpc"
 	"github.com/kestfor/raft/pkg/raft"
+	"github.com/kestfor/raft/pkg/wal"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
@@ -41,7 +44,7 @@ func newCommand(start func(context.Context, config.Config) error) *cobra.Command
 
 	cmd := &cobra.Command{
 		Use:           "raftnode",
-		Short:         "Run a Raft leader-election node",
+		Short:         "Run a Raft node",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -63,6 +66,7 @@ func newCommand(start func(context.Context, config.Config) error) *cobra.Command
 	flags := cmd.Flags()
 	flags.StringVar(&path, "config", os.Getenv("RAFT_CONFIG"), "YAML configuration file (RAFT_CONFIG)")
 	flags.StringVar(&overrides.ID, "id", overrides.ID, "unique node ID (RAFT_ID)")
+	flags.StringVar(&overrides.DataDir, "data-dir", overrides.DataDir, "node storage directory (RAFT_DATA_DIR)")
 	flags.StringVar(&overrides.ListenAddress, "listen", overrides.ListenAddress, "gRPC listen address (RAFT_LISTEN)")
 	flags.StringToStringVar(&overrides.Peers, "peers", nil, "other members: id=host:port,id=host:port (RAFT_PEERS)")
 
@@ -103,6 +107,8 @@ func applyOverrides(cfg *config.Config, overrides config.Config, flags *pflag.Fl
 		switch flag.Name {
 		case "id":
 			cfg.ID = overrides.ID
+		case "data-dir":
+			cfg.DataDir = overrides.DataDir
 		case "listen":
 			cfg.ListenAddress = overrides.ListenAddress
 		case "peers":
@@ -123,10 +129,19 @@ func applyOverrides(cfg *config.Config, overrides config.Config, flags *pflag.Fl
 	})
 }
 
-func run(ctx context.Context, cfg config.Config) error {
+func run(ctx context.Context, cfg config.Config) (result error) {
 	logger := newLogger(cfg, os.Stdout)
 	raftConfig := cfg.RaftConfig()
 	raftConfig.Logger = logger
+	if err := makeDataDir(cfg.DataDir); err != nil {
+		return err
+	}
+	journal, err := wal.Open(filepath.Join(cfg.DataDir, "raft.wal"))
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, journal.Close()) }()
+	raftConfig.Storage = journal
 
 	client, err := grpctransport.NewClient(
 		cfg.PeerAddresses(),
@@ -150,10 +165,11 @@ func run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	grpctransport.Register(server, node)
+	reflection.Register(server)
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(server, healthServer)
 
@@ -177,7 +193,6 @@ func run(ctx context.Context, cfg config.Config) error {
 		slog.String("address", listener.Addr().String()),
 	)
 
-	var result error
 	var nodeExited, serverExited bool
 	select {
 	case <-ctx.Done():
@@ -221,6 +236,31 @@ func newLogger(cfg config.Config, output io.Writer) *slog.Logger {
 	}
 
 	return slog.New(handler)
+}
+
+// Sync each newly created directory's parent so the WAL's path survives a crash.
+func makeDataDir(path string) error {
+	path = filepath.Clean(path)
+	if info, err := os.Stat(path); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("data path %q is not a directory", path)
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	parent := filepath.Dir(path)
+	if err := makeDataDir(parent); err != nil {
+		return err
+	}
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+	dir, err := os.Open(parent)
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func stopServer(server *grpc.Server) {

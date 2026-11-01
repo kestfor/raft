@@ -17,16 +17,17 @@ type Config struct {
 	HeartbeatInterval  time.Duration
 	RPCTimeout         time.Duration
 	Logger             *slog.Logger
+	Storage            Storage // Nil selects volatile storage, useful for tests.
 }
 
 func DefaultConfig(id NodeID, peers []NodeID) Config {
 	return Config{
 		ID:                 id,
 		Peers:              slices.Clone(peers),
-		ElectionTimeoutMin: 5000 * time.Millisecond,
-		ElectionTimeoutMax: 10 * time.Second,
-		HeartbeatInterval:  1000 * time.Millisecond,
-		RPCTimeout:         2000 * time.Millisecond,
+		ElectionTimeoutMin: 500 * time.Millisecond,
+		ElectionTimeoutMax: 1 * time.Second,
+		HeartbeatInterval:  100 * time.Millisecond,
+		RPCTimeout:         200 * time.Millisecond,
 	}
 }
 

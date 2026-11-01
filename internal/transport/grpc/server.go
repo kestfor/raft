@@ -24,6 +24,7 @@ func (s *service) GetStatus(context.Context, *raftpb.GetStatusRequest) (*raftpb.
 	state := s.handler.Status()
 	return &raftpb.GetStatusResponse{
 		Id: string(state.ID), Role: string(state.Role), Term: state.Term, LeaderId: string(state.LeaderID),
+		LastLogIndex: state.LastLogIndex, CommitIndex: state.CommitIndex,
 	}, nil
 }
 
@@ -33,7 +34,10 @@ func (s *service) RequestVote(
 ) (*raftpb.RequestVoteResponse, error) {
 	response, err := s.handler.RequestVote(
 		ctx,
-		raft.RequestVoteRequest{Term: req.GetTerm(), CandidateID: raft.NodeID(req.GetCandidateId())},
+		raft.RequestVoteRequest{
+			Term: req.GetTerm(), CandidateID: raft.NodeID(req.GetCandidateId()),
+			LastLogIndex: req.GetLastLogIndex(), LastLogTerm: req.GetLastLogTerm(),
+		},
 	)
 	if err != nil {
 		return nil, toGRPCError(err)
@@ -48,13 +52,25 @@ func (s *service) AppendEntries(
 ) (*raftpb.AppendEntriesResponse, error) {
 	response, err := s.handler.AppendEntries(
 		ctx,
-		raft.AppendEntriesRequest{Term: req.GetTerm(), LeaderID: raft.NodeID(req.GetLeaderId())},
+		raft.AppendEntriesRequest{
+			Term: req.GetTerm(), LeaderID: raft.NodeID(req.GetLeaderId()),
+			PrevLogIndex: req.GetPrevLogIndex(), PrevLogTerm: req.GetPrevLogTerm(),
+			Entries: entriesFromProto(req.GetEntries()), LeaderCommit: req.GetLeaderCommit(),
+		},
 	)
 	if err != nil {
 		return nil, toGRPCError(err)
 	}
 
 	return &raftpb.AppendEntriesResponse{Term: response.Term, Success: response.Success}, nil
+}
+
+func (s *service) Propose(ctx context.Context, req *raftpb.ProposeRequest) (*raftpb.ProposeResponse, error) {
+	index, err := s.handler.Propose(ctx, req.GetData())
+	if err != nil {
+		return nil, toGRPCError(err)
+	}
+	return &raftpb.ProposeResponse{Index: index}, nil
 }
 
 func toGRPCError(err error) error {
@@ -65,6 +81,8 @@ func toGRPCError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, raft.ErrNotRunning):
 		return status.Error(codes.Unavailable, err.Error())
+	case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrLeadershipLost):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Error(codes.Internal, "raft request failed")
 	}

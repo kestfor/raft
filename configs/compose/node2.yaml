@@ -3,3 +3,4 @@ listen: :9000
 peers:
   node1: node1:9000
   node3: node3:9000
+data_dir: /var/lib/raft

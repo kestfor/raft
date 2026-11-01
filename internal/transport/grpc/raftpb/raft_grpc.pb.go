@@ -22,18 +22,19 @@ const (
 	RaftService_RequestVote_FullMethodName   = "/raft.v1.RaftService/RequestVote"
 	RaftService_AppendEntries_FullMethodName = "/raft.v1.RaftService/AppendEntries"
 	RaftService_GetStatus_FullMethodName     = "/raft.v1.RaftService/GetStatus"
+	RaftService_Propose_FullMethodName       = "/raft.v1.RaftService/Propose"
 )
 
 // RaftServiceClient is the client API for RaftService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// RaftService implements election RPCs. AppendEntries carries heartbeats only
-// until log replication is implemented.
+// RaftService implements elections, log replication, and command submission.
 type RaftServiceClient interface {
 	RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error)
 	AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
+	Propose(ctx context.Context, in *ProposeRequest, opts ...grpc.CallOption) (*ProposeResponse, error)
 }
 
 type raftServiceClient struct {
@@ -74,16 +75,26 @@ func (c *raftServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest,
 	return out, nil
 }
 
+func (c *raftServiceClient) Propose(ctx context.Context, in *ProposeRequest, opts ...grpc.CallOption) (*ProposeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProposeResponse)
+	err := c.cc.Invoke(ctx, RaftService_Propose_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftServiceServer is the server API for RaftService service.
 // All implementations must embed UnimplementedRaftServiceServer
 // for forward compatibility.
 //
-// RaftService implements election RPCs. AppendEntries carries heartbeats only
-// until log replication is implemented.
+// RaftService implements elections, log replication, and command submission.
 type RaftServiceServer interface {
 	RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error)
 	AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
+	Propose(context.Context, *ProposeRequest) (*ProposeResponse, error)
 	mustEmbedUnimplementedRaftServiceServer()
 }
 
@@ -102,6 +113,9 @@ func (UnimplementedRaftServiceServer) AppendEntries(context.Context, *AppendEntr
 }
 func (UnimplementedRaftServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
+}
+func (UnimplementedRaftServiceServer) Propose(context.Context, *ProposeRequest) (*ProposeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Propose not implemented")
 }
 func (UnimplementedRaftServiceServer) mustEmbedUnimplementedRaftServiceServer() {}
 func (UnimplementedRaftServiceServer) testEmbeddedByValue()                     {}
@@ -178,6 +192,24 @@ func _RaftService_GetStatus_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RaftService_Propose_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProposeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftServiceServer).Propose(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftService_Propose_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftServiceServer).Propose(ctx, req.(*ProposeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RaftService_ServiceDesc is the grpc.ServiceDesc for RaftService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -196,6 +228,10 @@ var RaftService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStatus",
 			Handler:    _RaftService_GetStatus_Handler,
+		},
+		{
+			MethodName: "Propose",
+			Handler:    _RaftService_Propose_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
