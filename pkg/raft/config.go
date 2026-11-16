@@ -17,7 +17,8 @@ type Config struct {
 	HeartbeatInterval  time.Duration
 	RPCTimeout         time.Duration
 	Logger             *slog.Logger
-	Storage            Storage // Nil selects volatile storage, useful for tests.
+	Storage            Storage      // Nil selects volatile storage, useful for tests.
+	StateMachine       StateMachine // Nil selects NoOpStateMachine.
 }
 
 func DefaultConfig(id NodeID, peers []NodeID) Config {

@@ -1,6 +1,7 @@
 # A standalone node. Add other cluster members to peers for a multi-node cluster.
 id: node1
 listen: 127.0.0.1:9001
+http_listen: 127.0.0.1:18001
 peers: {}
 election_min: 500ms
 election_max: 1s

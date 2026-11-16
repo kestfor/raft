@@ -1,5 +1,6 @@
 id: node3
 listen: :19003
+http_listen: :18003
 peers:
   node1: 127.0.0.1:19001
   node2: 127.0.0.1:19002

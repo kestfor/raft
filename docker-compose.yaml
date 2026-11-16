@@ -23,6 +23,7 @@ services:
       - node1-data:/var/lib/raft
     ports:
       - "9001:9000"
+      - "18001:8080"
   node2:
     <<: *node
     volumes:
@@ -30,6 +31,7 @@ services:
       - node2-data:/var/lib/raft
     ports:
       - "9002:9000"
+      - "18002:8080"
   node3:
     <<: *node
     volumes:
@@ -37,6 +39,7 @@ services:
       - node3-data:/var/lib/raft
     ports:
       - "9003:9000"
+      - "18003:8080"
 
 volumes:
   node1-data:

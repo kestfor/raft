@@ -1,5 +1,6 @@
 id: node2
 listen: :9000
+http_listen: :8080
 peers:
   node1: node1:9000
   node3: node3:9000

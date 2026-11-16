@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	charmlog "charm.land/log/v2"
+	httpapi "github.com/kestfor/raft/internal/api/http"
 	"github.com/kestfor/raft/internal/config"
 	grpctransport "github.com/kestfor/raft/internal/transport/grpc"
 	"github.com/kestfor/raft/pkg/raft"
@@ -68,6 +70,12 @@ func newCommand(start func(context.Context, config.Config) error) *cobra.Command
 	flags.StringVar(&overrides.ID, "id", overrides.ID, "unique node ID (RAFT_ID)")
 	flags.StringVar(&overrides.DataDir, "data-dir", overrides.DataDir, "node storage directory (RAFT_DATA_DIR)")
 	flags.StringVar(&overrides.ListenAddress, "listen", overrides.ListenAddress, "gRPC listen address (RAFT_LISTEN)")
+	flags.StringVar(
+		&overrides.HTTPListenAddress,
+		"http-listen",
+		overrides.HTTPListenAddress,
+		"HTTP listen address (RAFT_HTTP_LISTEN)",
+	)
 	flags.StringToStringVar(&overrides.Peers, "peers", nil, "other members: id=host:port,id=host:port (RAFT_PEERS)")
 
 	flags.DurationVar(
@@ -111,6 +119,8 @@ func applyOverrides(cfg *config.Config, overrides config.Config, flags *pflag.Fl
 			cfg.DataDir = overrides.DataDir
 		case "listen":
 			cfg.ListenAddress = overrides.ListenAddress
+		case "http-listen":
+			cfg.HTTPListenAddress = overrides.HTTPListenAddress
 		case "peers":
 			cfg.Peers = overrides.Peers
 		case "election-min":
@@ -171,6 +181,13 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 
 	defer func() { _ = listener.Close() }()
 
+	httpListener, err := net.Listen("tcp", cfg.HTTPListenAddress)
+	if err != nil {
+		return fmt.Errorf("HTTP listen: %w", err)
+	}
+
+	defer func() { _ = httpListener.Close() }()
+
 	server := grpc.NewServer()
 	grpctransport.Register(server, node)
 	reflection.Register(server)
@@ -179,9 +196,18 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	httpServer := &http.Server{
+		Handler:           httpapi.NewHandler(node),
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      20 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	nodeDone := make(chan error, 1)
 	serverDone := make(chan error, 1)
+	httpDone := make(chan error, 1)
 	go func() { nodeDone <- node.Run(ctx) }()
 	go func() {
 		err := server.Serve(listener)
@@ -191,23 +217,43 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 
 		serverDone <- err
 	}()
+	go func() {
+		err := httpServer.Serve(httpListener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+
+		httpDone <- err
+	}()
 
 	logger.InfoContext(ctx, "gRPC listening",
 		slog.String("node", string(cfg.ID)),
 		slog.String("address", listener.Addr().String()),
 	)
+	logger.InfoContext(ctx, "HTTP listening",
+		slog.String("node", cfg.ID),
+		slog.String("address", httpListener.Addr().String()),
+	)
 
-	var nodeExited, serverExited bool
+	var nodeExited, serverExited, httpExited bool
 	select {
 	case <-ctx.Done():
 	case result = <-nodeDone:
 		nodeExited = true
 	case result = <-serverDone:
 		serverExited = true
+	case result = <-httpDone:
+		httpExited = true
 	}
 
 	healthServer.Shutdown()
 	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		result = errors.Join(result, err, httpServer.Close())
+	}
+
 	stopServer(server)
 
 	if !nodeExited {
@@ -216,6 +262,10 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 
 	if !serverExited {
 		result = errors.Join(result, <-serverDone)
+	}
+
+	if !httpExited {
+		result = errors.Join(result, <-httpDone)
 	}
 
 	return result

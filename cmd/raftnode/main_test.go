@@ -17,7 +17,7 @@ import (
 
 func clearEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"RAFT_CONFIG", "RAFT_DATA_DIR", "RAFT_ID", "RAFT_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
+	for _, name := range []string{"RAFT_CONFIG", "RAFT_DATA_DIR", "RAFT_ID", "RAFT_LISTEN", "RAFT_HTTP_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
 		t.Setenv(name, "")
 	}
 }
@@ -36,6 +36,7 @@ func TestCommandConfigurationPrecedence(t *testing.T) {
 	clearEnvironment(t)
 	path := writeConfig(t, `id: file-node
 listen: 127.0.0.1:9001
+http_listen: 127.0.0.1:8001
 peers:
   old-node: localhost:9002
 log_level: debug
@@ -46,6 +47,7 @@ election_min: 800ms
 	t.Setenv("RAFT_ID", "env-node")
 	t.Setenv("RAFT_DATA_DIR", "from-env")
 	t.Setenv("RAFT_LISTEN", "127.0.0.1:9101")
+	t.Setenv("RAFT_HTTP_LISTEN", "127.0.0.1:8101")
 	t.Setenv("RAFT_HEARTBEAT", "150ms")
 	var got config.Config
 	called := false
@@ -63,6 +65,7 @@ election_min: 800ms
 	cmd.SetArgs(
 		[]string{
 			"--id=flag-node",
+			"--http-listen=127.0.0.1:8201",
 			"--peers=NodeB=[::1]:9202",
 			"--log-level=info",
 			"--log-format=json",
@@ -73,7 +76,8 @@ election_min: 800ms
 		t.Fatal(err)
 	}
 
-	if !called || got.ID != "flag-node" || got.DataDir != "from-flag" || got.ListenAddress != "127.0.0.1:9101" ||
+	if got.HTTPListenAddress != "127.0.0.1:8201" || !called || got.ID != "flag-node" || got.DataDir != "from-flag" ||
+		got.ListenAddress != "127.0.0.1:9101" ||
 		got.LogLevel != slog.LevelInfo ||
 		got.LogFormat != config.LogFormatJSON ||
 		got.ElectionTimeoutMin != 800*time.Millisecond ||
@@ -91,6 +95,7 @@ func TestExplicitDefaultsOverrideConfiguration(t *testing.T) {
 	clearEnvironment(t)
 	path := writeConfig(t, `id: a
 listen: 127.0.0.1:9001
+http_listen: 127.0.0.1:8001
 peers:
   b: localhost:9002
 election_min: 800ms
@@ -102,11 +107,13 @@ log_format: plain
 `)
 	cmd := newCommand(func(_ context.Context, cfg config.Config) error {
 		defaults := config.Default()
-		if cfg.ListenAddress != defaults.ListenAddress || cfg.ElectionTimeoutMin != defaults.ElectionTimeoutMin ||
+		if cfg.HTTPListenAddress != defaults.HTTPListenAddress || cfg.ListenAddress != defaults.ListenAddress ||
+			cfg.ElectionTimeoutMin != defaults.ElectionTimeoutMin ||
 			cfg.ElectionTimeoutMax != defaults.ElectionTimeoutMax ||
 			cfg.HeartbeatInterval != defaults.HeartbeatInterval ||
 			cfg.RPCTimeout != defaults.RPCTimeout ||
-			cfg.LogLevel != defaults.LogLevel || cfg.LogFormat != defaults.LogFormat ||
+			cfg.LogLevel != defaults.LogLevel ||
+			cfg.LogFormat != defaults.LogFormat ||
 			len(cfg.Peers) != 1 {
 			t.Errorf("explicit flag defaults did not override YAML: %+v", cfg)
 		}
@@ -118,6 +125,7 @@ log_format: plain
 			"--config",
 			path,
 			"--listen=:9000",
+			"--http-listen=:8080",
 			"--election-min=500ms",
 			"--election-max=1s",
 			"--heartbeat=100ms",
@@ -175,6 +183,7 @@ func TestCommandRejectsInvalidArguments(t *testing.T) {
 		{"--id=a", "--peers=a=localhost:9001"},
 		{"--id=a", "--peers=b"},
 		{"--id=a", "--listen=invalid"},
+		{"--id=a", "--http-listen=invalid"},
 		{"--id=a", "--log-level=nope"},
 		{"--id=a", "--log-format=xml"},
 		{"--id=a", "--heartbeat=soon"},

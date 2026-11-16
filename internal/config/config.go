@@ -20,6 +20,7 @@ type Config struct {
 	ID                 string            `yaml:"id"           env:"RAFT_ID"`
 	DataDir            string            `yaml:"data_dir"     env:"RAFT_DATA_DIR"`
 	ListenAddress      string            `yaml:"listen"       env:"RAFT_LISTEN"`
+	HTTPListenAddress  string            `yaml:"http_listen"  env:"RAFT_HTTP_LISTEN"`
 	Peers              map[string]string `yaml:"peers"        env:"RAFT_PEERS"        envKeyValSeparator:"="`
 	ElectionTimeoutMin time.Duration     `yaml:"election_min" env:"RAFT_ELECTION_MIN"`
 	ElectionTimeoutMax time.Duration     `yaml:"election_max" env:"RAFT_ELECTION_MAX"`
@@ -39,6 +40,7 @@ func Default() Config {
 
 	return Config{
 		ListenAddress:      ":9000",
+		HTTPListenAddress:  ":8080",
 		DataDir:            "data",
 		ElectionTimeoutMin: timings.ElectionTimeoutMin,
 		ElectionTimeoutMax: timings.ElectionTimeoutMax,
@@ -107,6 +109,10 @@ func (c Config) Validate() error {
 
 	if _, _, err := net.SplitHostPort(c.ListenAddress); err != nil {
 		return fmt.Errorf("invalid listen address: %w", err)
+	}
+
+	if _, _, err := net.SplitHostPort(c.HTTPListenAddress); err != nil {
+		return fmt.Errorf("invalid HTTP listen address: %w", err)
 	}
 
 	for id, address := range c.Peers {

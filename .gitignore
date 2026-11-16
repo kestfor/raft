@@ -1,5 +1,6 @@
 /docs/*
 !/docs/log-replication.md
+!/docs/state-machine.md
 /.idea/
 /bin/
 /coverage.out

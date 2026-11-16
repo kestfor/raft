@@ -13,7 +13,7 @@ import (
 
 func clearEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"RAFT_DATA_DIR", "RAFT_ID", "RAFT_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
+	for _, name := range []string{"RAFT_DATA_DIR", "RAFT_ID", "RAFT_LISTEN", "RAFT_HTTP_LISTEN", "RAFT_PEERS", "RAFT_ELECTION_MIN", "RAFT_ELECTION_MAX", "RAFT_HEARTBEAT", "RAFT_RPC_TIMEOUT", "RAFT_LOG_LEVEL", "RAFT_LOG_FORMAT"} {
 		t.Setenv(name, "")
 	}
 }
@@ -32,6 +32,7 @@ func TestLoadYAMLAndDefaults(t *testing.T) {
 	clearEnvironment(t)
 	cfg, err := Load(configFile(t, `id: NodeA
 listen: 127.0.0.1:9000
+http_listen: 127.0.0.1:8000
 peers:
   NodeC: "[::1]:9002"
   NodeB: localhost:9001
@@ -48,7 +49,8 @@ election_min: 800ms
 	}
 
 	core := cfg.RaftConfig()
-	if cfg.ID != "NodeA" || cfg.LogLevel != slog.LevelDebug || cfg.LogFormat != LogFormatPlain ||
+	if cfg.HTTPListenAddress != "127.0.0.1:8000" || cfg.ID != "NodeA" || cfg.LogLevel != slog.LevelDebug ||
+		cfg.LogFormat != LogFormatPlain ||
 		core.ElectionTimeoutMin != 800*time.Millisecond ||
 		core.ElectionTimeoutMax != Default().ElectionTimeoutMax {
 		t.Fatalf("unexpected config: %+v", cfg)
@@ -65,6 +67,7 @@ func TestEnvironmentOverridesYAML(t *testing.T) {
 		"RAFT_DATA_DIR":     "env-data",
 		"RAFT_ID":           "env-node",
 		"RAFT_LISTEN":       "127.0.0.1:9100",
+		"RAFT_HTTP_LISTEN":  "127.0.0.1:8100",
 		"RAFT_PEERS":        "NodeC=[::1]:9102,NodeB=localhost:9101",
 		"RAFT_ELECTION_MIN": "900ms",
 		"RAFT_ELECTION_MAX": "2s",
@@ -89,7 +92,7 @@ log_format: plain
 	}
 
 	want := Config{
-		DataDir: "env-data", ID: "env-node", ListenAddress: "127.0.0.1:9100",
+		DataDir: "env-data", ID: "env-node", ListenAddress: "127.0.0.1:9100", HTTPListenAddress: "127.0.0.1:8100",
 		Peers:              map[string]string{"NodeB": "localhost:9101", "NodeC": "[::1]:9102"},
 		ElectionTimeoutMin: 900 * time.Millisecond, ElectionTimeoutMax: 2 * time.Second,
 		HeartbeatInterval: 150 * time.Millisecond, RPCTimeout: 300 * time.Millisecond, LogLevel: slog.LevelInfo,
@@ -151,6 +154,7 @@ func TestValidateDeploymentSettings(t *testing.T) {
 		"empty data directory": func(c *Config) { c.DataDir = "" },
 		"empty ID":             func(c *Config) { c.ID = "" },
 		"whitespace ID":        func(c *Config) { c.ID = " a" },
+		"bad HTTP listen":      func(c *Config) { c.HTTPListenAddress = "invalid" },
 		"bad listen":           func(c *Config) { c.ListenAddress = "invalid" },
 		"self peer":            func(c *Config) { c.Peers = map[string]string{"a": "localhost:9001"} },
 		"empty peer":           func(c *Config) { c.Peers = map[string]string{"": "localhost:9001"} },

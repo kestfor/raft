@@ -6,23 +6,31 @@ import (
 	"slices"
 )
 
-// Propose appends a command on the leader and waits until it is committed by a
-// majority. Success does not mean that a state machine has executed the command.
-// After an append, errors return its index: cancellation or lost leadership does
-// not roll it back, and it may still commit. Retries are not deduplicated.
-func (n *Node) Propose(ctx context.Context, data []byte) (uint64, error) {
-	entry, err := n.appendCommand(ctx, data)
-	if err != nil {
-		return 0, err
-	}
-
-	return entry.Index, n.waitForCommit(ctx, entry)
+type proposalID struct {
+	index uint64
+	term  uint64
 }
 
-func (n *Node) appendCommand(ctx context.Context, data []byte) (Entry, error) {
+// Propose waits for commit and local application, returning this command's result.
+// Errors after append include its index; cancellation does not roll it back.
+func (n *Node) Propose(ctx context.Context, data []byte) (uint64, any, error) {
 	n.mu.Lock()
-	defer n.mu.Unlock()
+	entry, err := n.appendCommand(ctx, data)
+	if err != nil {
+		n.mu.Unlock()
+		return 0, nil, err
+	}
 
+	id := proposalID{index: entry.Index, term: entry.Term}
+	n.log.pending[id] = nil
+	n.mu.Unlock()
+
+	value, err := n.waitForResult(ctx, id)
+	return entry.Index, value, err
+}
+
+// appendCommand requires mu to be held.
+func (n *Node) appendCommand(ctx context.Context, data []byte) (Entry, error) {
 	if err := n.canPropose(ctx); err != nil {
 		return Entry{}, err
 	}
@@ -43,25 +51,28 @@ func (n *Node) appendCommand(ctx context.Context, data []byte) (Entry, error) {
 	return entry, nil
 }
 
-func (n *Node) waitForCommit(ctx context.Context, entry Entry) error {
+func (n *Node) waitForResult(ctx context.Context, id proposalID) (any, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	defer delete(n.log.pending, id)
 
 	for {
-		if entry.Index <= n.log.commitIndex && n.log.entries[entry.Index].Term == entry.Term {
-			return nil
+		committed := id.index <= n.log.commitIndex && n.log.entries[id.index].Term == id.term
+		if committed && id.index <= n.log.lastApplied {
+			return n.log.pending[id], nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if n.runtime.failure != nil {
+			return nil, n.runtime.failure
+		}
+		if !n.runtime.running {
+			return nil, ErrNotRunning
 		}
 
-		if err := n.canPropose(ctx); err != nil {
-			if err == ErrNotLeader {
-				return ErrLeadershipLost
-			}
-
-			return err
-		}
-
-		if n.election.currentTerm != entry.Term {
-			return ErrLeadershipLost
+		if !committed && (n.election.role != Leader || n.election.currentTerm != id.term) {
+			return nil, ErrLeadershipLost
 		}
 
 		changed := n.log.changed
