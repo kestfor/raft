@@ -27,8 +27,9 @@ type handlerStub struct {
 	propose       func(context.Context, []byte) (uint64, error)
 }
 
-func (h handlerStub) Propose(ctx context.Context, data []byte) (uint64, error) {
-	return h.propose(ctx, data)
+func (h handlerStub) Propose(ctx context.Context, data []byte) (uint64, any, error) {
+	index, err := h.propose(ctx, data)
+	return index, nil, err
 }
 
 func (h handlerStub) Status() raft.Status { return h.status }

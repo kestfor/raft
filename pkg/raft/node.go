@@ -39,13 +39,15 @@ type electionState struct {
 type logState struct {
 	entries     []Entry // Includes an empty entry at index zero.
 	commitIndex uint64
+	lastApplied uint64
+	pending     map[proposalID]any // Results for active Propose calls only.
 
 	nextIndex  map[NodeID]uint64
 	matchIndex map[NodeID]uint64
 	readRound  uint64
 	readAck    map[NodeID]uint64
 
-	changed chan struct{} // Wakes Propose on commit, stepdown, or shutdown.
+	changed chan struct{} // Reports commit, application, stepdown, or shutdown.
 }
 
 type runtimeState struct {
@@ -75,6 +77,9 @@ func NewNode(config Config, transport Transport) (*Node, error) {
 	}
 
 	config.Peers = slices.Clone(config.Peers)
+	if config.StateMachine == nil {
+		config.StateMachine = NoOpStateMachine{}
+	}
 	n := &Node{
 		config:    config,
 		transport: transport,
@@ -83,6 +88,7 @@ func NewNode(config Config, transport Transport) (*Node, error) {
 		log: logState{
 			entries: []Entry{{}},
 			changed: make(chan struct{}),
+			pending: make(map[proposalID]any),
 		},
 		runtime: runtimeState{
 			rpcInFlight: set.New[NodeID](),
@@ -98,8 +104,8 @@ func NewNode(config Config, transport Transport) (*Node, error) {
 }
 
 // Run blocks until ctx is canceled or the protocol cannot continue. Cancellation
-// is a normal shutdown. All outgoing RPCs finish before Run returns.
-func (n *Node) Run(ctx context.Context) error {
+// is a normal shutdown. Outgoing RPCs and any active Do finish before Run returns.
+func (n *Node) Run(ctx context.Context) (runErr error) {
 	n.mu.Lock()
 	if n.runtime.started {
 		n.mu.Unlock()
@@ -114,6 +120,12 @@ func (n *Node) Run(ctx context.Context) error {
 	n.notifyLogChange()
 	n.mu.Unlock()
 
+	applyDone := make(chan struct{})
+	go func() {
+		defer close(applyDone)
+		n.applyCommitted(ctx)
+	}()
+
 	defer func() {
 		n.mu.Lock()
 		n.runtime.running = false
@@ -124,6 +136,12 @@ func (n *Node) Run(ctx context.Context) error {
 
 		cancel()
 		n.runtime.rpcWG.Wait()
+		<-applyDone
+		n.mu.Lock()
+		if runErr == nil {
+			runErr = n.runtime.failure
+		}
+		n.mu.Unlock()
 
 		n.logger.InfoContext(ctx, "node stopped")
 	}()
@@ -511,6 +529,7 @@ func (n *Node) status() Status {
 		LeaderID:     n.election.leaderID,
 		LastLogIndex: n.lastIndex(),
 		CommitIndex:  n.log.commitIndex,
+		AppliedIndex: n.log.lastApplied,
 	}
 }
 

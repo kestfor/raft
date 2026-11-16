@@ -71,7 +71,10 @@ func testConfig(id NodeID, peers []NodeID) Config {
 	return cfg
 }
 
-func startMemoryCluster(t *testing.T) (*memoryNetwork, map[NodeID]context.CancelFunc, map[NodeID]<-chan error) {
+func startMemoryCluster(
+	t *testing.T,
+	configure ...func(*Config),
+) (*memoryNetwork, map[NodeID]context.CancelFunc, map[NodeID]<-chan error) {
 	t.Helper()
 	network := &memoryNetwork{nodes: make(map[NodeID]*Node)}
 	cancels := make(map[NodeID]context.CancelFunc)
@@ -88,6 +91,9 @@ func startMemoryCluster(t *testing.T) (*memoryNetwork, map[NodeID]context.Cancel
 		cfg := testConfig(id, peers)
 		cfg.ElectionTimeoutMin += time.Duration(i) * 100 * time.Millisecond
 		cfg.ElectionTimeoutMax = cfg.ElectionTimeoutMin + time.Nanosecond
+		for _, configureNode := range configure {
+			configureNode(&cfg)
+		}
 		node, err := NewNode(cfg, memoryTransport{network: network, from: id})
 		if err != nil {
 			t.Fatal(err)

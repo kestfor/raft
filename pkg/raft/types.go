@@ -53,4 +53,5 @@ type Status struct {
 	LeaderID     NodeID // Empty if unknown.
 	LastLogIndex uint64
 	CommitIndex  uint64
+	AppliedIndex uint64
 }

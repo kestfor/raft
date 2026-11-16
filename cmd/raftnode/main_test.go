@@ -278,7 +278,7 @@ func TestLoggerForcedColor(t *testing.T) {
 }
 
 func TestRawProposeIsRejected(t *testing.T) {
-	index, err := (protocolOnly{}).Propose(t.Context(), []byte("bypass KV"))
+	index, _, err := (protocolOnly{}).Propose(t.Context(), []byte("bypass KV"))
 	if index != 0 || !errors.Is(err, raft.ErrInvalidRequest) {
 		t.Fatalf("%d %v", index, err)
 	}

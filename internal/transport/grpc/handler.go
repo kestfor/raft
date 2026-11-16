@@ -10,7 +10,7 @@ type Handler interface {
 	RequestVote(ctx context.Context, req raft.RequestVoteRequest) (raft.RequestVoteResponse, error)
 	AppendEntries(ctx context.Context, req raft.AppendEntriesRequest) (raft.AppendEntriesResponse, error)
 	Status() raft.Status
-	Propose(ctx context.Context, data []byte) (uint64, error)
+	Propose(ctx context.Context, data []byte) (uint64, any, error)
 }
 
 var _ Handler = (*raft.Node)(nil)

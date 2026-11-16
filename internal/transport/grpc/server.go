@@ -75,7 +75,7 @@ func (s *service) AppendEntries(
 }
 
 func (s *service) Propose(ctx context.Context, req *raftpb.ProposeRequest) (*raftpb.ProposeResponse, error) {
-	index, err := s.handler.Propose(ctx, req.GetData())
+	index, _, err := s.handler.Propose(ctx, req.GetData())
 	if err != nil {
 		return nil, toGRPCError(err)
 	}

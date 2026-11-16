@@ -79,6 +79,11 @@ func batchLeader(t *testing.T) (*Node, *batchStorage) {
 		t.Fatal(err)
 	}
 
+	applyCtx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); n.applyCommitted(applyCtx) }()
+	synctest.Wait()
+	t.Cleanup(func() { cancel(); <-done })
 	return n, storage
 }
 
@@ -88,7 +93,7 @@ func TestProposalBatchTimeoutAndReplay(t *testing.T) {
 		done := make(chan proposalResult, 4)
 		for range 4 {
 			go func() {
-				index, err := n.Propose(t.Context(), []byte("command"))
+				index, _, err := n.Propose(t.Context(), []byte("command"))
 				done <- proposalResult{entry: Entry{Index: index}, err: err}
 			}()
 		}
@@ -139,7 +144,7 @@ func TestProposalBatchCountLimitFlushesImmediately(t *testing.T) {
 		done := make(chan error, maxAppendEntries)
 		start := time.Now()
 		for range maxAppendEntries - 1 {
-			go func() { _, err := n.Propose(t.Context(), nil); done <- err }()
+			go func() { _, _, err := n.Propose(t.Context(), nil); done <- err }()
 		}
 
 		synctest.Wait()
@@ -147,7 +152,7 @@ func TestProposalBatchCountLimitFlushesImmediately(t *testing.T) {
 			t.Fatal("early flush")
 		}
 
-		go func() { _, err := n.Propose(t.Context(), nil); done <- err }()
+		go func() { _, _, err := n.Propose(t.Context(), nil); done <- err }()
 		for range maxAppendEntries {
 			if err := <-done; err != nil {
 				t.Fatal(err)
@@ -171,7 +176,7 @@ func TestProposalBatchByteLimit(t *testing.T) {
 			n, storage := batchLeader(t)
 			done := make(chan error, 2)
 			for range 2 {
-				go func() { _, err := n.Propose(t.Context(), make([]byte, size)); done <- err }()
+				go func() { _, _, err := n.Propose(t.Context(), make([]byte, size)); done <- err }()
 			}
 
 			for range 2 {
@@ -210,7 +215,7 @@ func TestCanceledProposalIsExcludedBeforeFlush(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		canceled := make(chan proposalResult, 1)
 		go func() {
-			index, err := n.Propose(ctx, []byte("canceled"))
+			index, _, err := n.Propose(ctx, []byte("canceled"))
 			canceled <- proposalResult{entry: Entry{Index: index}, err: err}
 		}()
 		synctest.Wait()
@@ -220,7 +225,7 @@ func TestCanceledProposalIsExcludedBeforeFlush(t *testing.T) {
 			t.Fatal(result)
 		}
 
-		index, err := n.Propose(t.Context(), []byte("kept"))
+		index, _, err := n.Propose(t.Context(), []byte("kept"))
 		if err != nil || index != 2 {
 			t.Fatalf("index=%d err=%v", index, err)
 		}
@@ -267,7 +272,7 @@ func TestBatchStorageFailureRejectsAllWithoutPublishing(t *testing.T) {
 		done := make(chan proposalResult, 8)
 		for range 8 {
 			go func() {
-				index, err := n.Propose(t.Context(), nil)
+				index, _, err := n.Propose(t.Context(), nil)
 				done <- proposalResult{entry: Entry{Index: index}, err: err}
 			}()
 		}
@@ -289,7 +294,7 @@ func TestPendingBatchRejectedOnStepdownAndOldTimerIsHarmless(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		n, storage := batchLeader(t)
 		done := make(chan error, 1)
-		go func() { _, err := n.Propose(t.Context(), []byte("old-term")); done <- err }()
+		go func() { _, _, err := n.Propose(t.Context(), []byte("old-term")); done <- err }()
 		synctest.Wait()
 		old := n.proposals
 		n.mu.Lock()
@@ -310,7 +315,7 @@ func TestPendingBatchRejectedOnStepdownAndOldTimerIsHarmless(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		go func() { _, err := n.Propose(t.Context(), []byte("new-term")); done <- err }()
+		go func() { _, _, err := n.Propose(t.Context(), []byte("new-term")); done <- err }()
 		synctest.Wait()
 		n.mu.Lock()
 		n.flushProposals(old)
@@ -338,7 +343,7 @@ func TestShutdownRejectsPendingBatch(t *testing.T) {
 		n := network.nodes["a"]
 		before := n.Status().LastLogIndex
 		proposal := make(chan error, 1)
-		go func() { _, err := n.Propose(t.Context(), nil); proposal <- err }()
+		go func() { _, _, err := n.Propose(t.Context(), nil); proposal <- err }()
 		synctest.Wait()
 		cancels["a"]()
 		if err := <-done["a"]; err != nil {

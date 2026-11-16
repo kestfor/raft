@@ -203,7 +203,7 @@ func propose(t *testing.T, n *Node, data string) uint64 {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	index, err := n.Propose(ctx, []byte(data))
+	index, _, err := n.Propose(ctx, []byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestReplicationPartitionConflictAndCatchUp(t *testing.T) {
 		network.mu.Unlock()
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 		defer cancel()
-		uncommitted, err := network.nodes["a"].Propose(ctx, []byte("isolated"))
+		uncommitted, _, err := network.nodes["a"].Propose(ctx, []byte("isolated"))
 		if !errors.Is(err, context.DeadlineExceeded) || uncommitted <= index {
 			t.Fatalf("isolated proposal: %d %v", uncommitted, err)
 		}
@@ -324,7 +324,7 @@ func TestProposeWakesAllWaiters(t *testing.T) {
 				const proposals = 8
 				done := make(chan error, proposals)
 				for range proposals {
-					go func() { _, err := n.Propose(t.Context(), []byte("pending")); done <- err }()
+					go func() { _, _, err := n.Propose(t.Context(), []byte("pending")); done <- err }()
 				}
 
 				synctest.Wait()
@@ -463,7 +463,7 @@ func TestStorageFailureStopsNodeBeforeAcknowledgment(t *testing.T) {
 				}
 			case "propose":
 				n.election.role = Leader
-				_, err = n.Propose(t.Context(), []byte("command"))
+				_, _, err = n.Propose(t.Context(), []byte("command"))
 			case "election":
 				err = n.startElection(ctx)
 			}
@@ -473,7 +473,7 @@ func TestStorageFailureStopsNodeBeforeAcknowledgment(t *testing.T) {
 				t.Fatalf("failure published state: err=%v status=%+v running=%v", err, n.status(), n.runtime.running)
 			}
 
-			if _, err := n.Propose(t.Context(), nil); !errors.Is(err, storageErr) {
+			if _, _, err := n.Propose(t.Context(), nil); !errors.Is(err, storageErr) {
 				t.Fatal("failed node accepted new work")
 			}
 		})
@@ -490,26 +490,18 @@ func TestSingleNodeCommitsAndRecoversOldEntries(t *testing.T) {
 
 		cfg := testConfig("a", nil)
 		cfg.Storage = journal
-		n, err := NewNode(cfg, &slowTransport{})
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		n.runtime.running = true
-		n.runtime.electionTimer = time.NewTimer(time.Hour)
-		if err := n.startElection(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-
-		if attempt == 0 {
-			if index := propose(t, n, "durable"); index != 2 {
-				t.Fatalf("index=%d", index)
+		synctest.Test(t, func(t *testing.T) {
+			n, cancel, done := startStateMachineNode(t, cfg)
+			defer stopStateMachineNode(t, cancel, done)
+			time.Sleep(150 * time.Millisecond)
+			if attempt == 0 {
+				if index := propose(t, n, "durable"); index != 2 {
+					t.Fatalf("index=%d", index)
+				}
+			} else if status := n.Status(); status.CommitIndex != 3 || string(n.log.entries[2].Data) != "durable" {
+				t.Fatalf("no-op did not commit restored prefix: %+v", status)
 			}
-		} else if n.log.commitIndex != 3 || string(n.log.entries[2].Data) != "durable" {
-			t.Fatalf("no-op did not commit restored prefix: %+v", n.status())
-		}
-
-		n.runtime.electionTimer.Stop()
+		})
 		if err := journal.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -517,37 +509,37 @@ func TestSingleNodeCommitsAndRecoversOldEntries(t *testing.T) {
 }
 
 func TestProposeValidationAndOwnership(t *testing.T) {
-	n, ctx := newElectionTestNode(t, "a", nil)
-	if _, err := n.Propose(t.Context(), nil); !errors.Is(err, ErrNotLeader) {
-		t.Fatal(err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		n, cancel, done := startStateMachineNode(t, testConfig("a", nil))
+		defer stopStateMachineNode(t, cancel, done)
+		if _, _, err := n.Propose(t.Context(), nil); !errors.Is(err, ErrNotLeader) {
+			t.Fatal(err)
+		}
+		time.Sleep(150 * time.Millisecond)
+		ctx, cancelRequest := context.WithCancel(t.Context())
+		cancelRequest()
+		if _, _, err := n.Propose(ctx, nil); !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		if _, _, err := n.Propose(t.Context(), make([]byte, MaxCommandSize+1)); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatal(err)
+		}
+		if n.Status().LastLogIndex != 1 {
+			t.Fatal("rejected proposal changed log")
+		}
 
-	if err := n.startElection(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := n.Propose(ctx, nil); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-
-	if _, err := n.Propose(t.Context(), make([]byte, MaxCommandSize+1)); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatal(err)
-	}
-
-	if n.lastIndex() != 1 {
-		t.Fatal("rejected proposal changed log")
-	}
-
-	data := []byte("command")
-	index, err := n.Propose(t.Context(), data)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	data[0] = 'X'
-	if string(n.log.entries[index].Data) != "command" {
-		t.Fatal("caller can mutate the log")
-	}
+		data := []byte("command")
+		index, _, err := n.Propose(t.Context(), data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data[0] = 'X'
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if string(n.log.entries[index].Data) != "command" {
+			t.Fatal("caller can mutate the log")
+		}
+	})
 }
 
 func TestStorageFailureReturnsFromRunAndUnblocksPropose(t *testing.T) {
@@ -560,13 +552,13 @@ func TestStorageFailureReturnsFromRunAndUnblocksPropose(t *testing.T) {
 		network.mu.Unlock()
 		n := network.nodes["a"]
 		pending := make(chan error, 1)
-		go func() { _, err := n.Propose(t.Context(), []byte("pending")); pending <- err }()
+		go func() { _, _, err := n.Propose(t.Context(), []byte("pending")); pending <- err }()
 		synctest.Wait()
 		storageErr := errors.New("sync failed")
 		n.mu.Lock()
 		n.config.Storage = &failingStorage{err: storageErr}
 		n.mu.Unlock()
-		if _, err := n.Propose(t.Context(), []byte("failure")); !errors.Is(err, storageErr) {
+		if _, _, err := n.Propose(t.Context(), []byte("failure")); !errors.Is(err, storageErr) {
 			t.Fatalf("propose error=%v", err)
 		}
 

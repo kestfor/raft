@@ -15,7 +15,7 @@ type raftLog struct{ node *raft.Node }
 var _ kv.Log = raftLog{}
 
 func (l raftLog) Propose(ctx context.Context, data []byte) (uint64, error) {
-	index, err := l.node.Propose(ctx, data)
+	index, _, err := l.node.Propose(ctx, data)
 	return index, translate(err)
 }
 
@@ -65,6 +65,6 @@ func translate(err error) error {
 // Keep election/replication RPCs, but never allow raw commands to bypass KV validation.
 type protocolOnly struct{ *raft.Node }
 
-func (protocolOnly) Propose(context.Context, []byte) (uint64, error) {
-	return 0, fmt.Errorf("%w: use the KV REST API", raft.ErrInvalidRequest)
+func (protocolOnly) Propose(context.Context, []byte) (uint64, any, error) {
+	return 0, nil, fmt.Errorf("%w: use the KV REST API", raft.ErrInvalidRequest)
 }
