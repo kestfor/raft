@@ -63,7 +63,7 @@ func TestExactPercentiles(t *testing.T) {
 }
 
 func TestMixedWorkloadCountsAndIntegrity(t *testing.T) {
-	m := &memoryClient{values: map[string][]byte{"bench/0": []byte("xx")}}
+	m := &memoryClient{values: map[string][]byte{"bench/0": benchmarkValue(2)}}
 	cfg := settings{Requests: 100, Clients: 8, Size: 2, Keyspace: 1, ReadPercent: 80}
 	r := benchmark(t.Context(), m, cfg, "mixed", "bench/", &progress{})
 	if r.Completed != 100 || r.Success != 100 || r.Errors != 0 || m.reads != 80 || m.writes != 20 {
@@ -99,16 +99,23 @@ func TestCLIJSONWarmupAndRedirect(t *testing.T) {
 			return
 		}
 
-		key := strings.TrimPrefix(r.URL.Path, "/v1/kv/")
-		if r.Method == http.MethodPut {
-			value, _ := io.ReadAll(r.Body)
-			index, _ := m.Put(r.Context(), key, value)
+		key := r.URL.Query().Get("key")
+		if r.Method == http.MethodPost {
+			var input struct {
+				Key   string          `json:"key"`
+				Value json.RawMessage `json:"value"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			index, _ := m.Put(r.Context(), input.Key, input.Value)
 			_ = json.NewEncoder(w).Encode(map[string]uint64{"index": index})
 			return
 		}
 
 		value, _ := m.Get(r.Context(), key)
-		_, _ = w.Write(value)
+		_ = json.NewEncoder(w).Encode(struct {
+			Key   string          `json:"key"`
+			Value json.RawMessage `json:"value"`
+		}{key, value})
 	}))
 	defer leader.Close()
 	follower := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +170,7 @@ func TestCLIJSONWarmupAndRedirect(t *testing.T) {
 }
 
 func TestCLIValidationAndHelp(t *testing.T) {
-	for _, args := range [][]string{{"-n", "0"}, {"-c", "0"}, {"-d", "-1"}, {"-r", "0"}, {"-t", "invalid"}, {"--read-percent", "101"}, {"--warmup", "-1"}, {"--color", "invalid"}} {
+	for _, args := range [][]string{{"-n", "0"}, {"-c", "0"}, {"-d", "-1"}, {"-d", "524287"}, {"-r", "0"}, {"-t", "invalid"}, {"--read-percent", "101"}, {"--warmup", "-1"}, {"--color", "invalid"}} {
 		cmd := newCommand()
 		cmd.SetArgs(args)
 		cmd.SetOut(io.Discard)
@@ -217,7 +224,7 @@ func TestCLIReportsMeasuredErrorsAsJSON(t *testing.T) {
 		switch {
 		case r.URL.Path == "/v1/status":
 			_, _ = io.WriteString(w, `{"id":"a","role":"leader","term":1}`)
-		case r.Method == http.MethodPut:
+		case r.Method == http.MethodPost:
 			_, _ = io.Copy(io.Discard, r.Body)
 			_, _ = io.WriteString(w, `{"index":1}`)
 		default:

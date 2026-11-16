@@ -92,6 +92,16 @@ func TestReadIndexIgnoresOldRPCAndWaitsForCurrentTermCommit(t *testing.T) {
 		}
 
 		n.sendAppendEntries(stoppedCtx, "b", req, round)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("read returned before apply: %v", err)
+		default:
+		}
+		n.mu.Lock()
+		n.log.lastApplied = 1
+		n.notifyLogChange()
+		n.mu.Unlock()
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}

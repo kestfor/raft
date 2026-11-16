@@ -33,8 +33,8 @@ func newCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "raftctl",
 		Short:         "A small, replicated key/value store",
-		Long:          "Read and write a Raft-backed store. Connect to any node; KV requests follow leader redirects.\nValues are bytes. GET writes exact bytes to stdout, suitable for pipes and files.",
-		Example:       "  raftctl put greeting 'Hello, Raft!'\n  raftctl get greeting\n  raftctl --endpoint http://localhost:18002 status\n  cat image.png | raftctl put image --stdin",
+		Long:          "Read and write a Raft-backed store. Connect to any node; KV requests follow leader redirects.\nValues are JSON: strings, numbers, arrays, objects or null. GET writes the JSON value to stdout.",
+		Example:       "  raftctl put greeting '\"Hello, Raft!\"'\n  raftctl get greeting\n  raftctl --endpoint http://localhost:18002 status\n  cat value.json | raftctl put document --stdin",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
@@ -49,14 +49,14 @@ func newCommand() *cobra.Command {
 	root.SetErr(os.Stderr)
 	root.PersistentFlags().StringVar(&endpoint, "endpoint", "http://localhost:18001", "REST origin of any node")
 	root.PersistentFlags().DurationVar(&timeout, "timeout", 5*time.Second, "total request timeout, including redirects")
-	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "machine-readable output (values encoded as base64)")
+	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "include the key in JSON output")
 
 	var fromFile string
 	var fromStdin bool
 	put := &cobra.Command{
 		Use:     "put KEY [VALUE]",
-		Short:   "Create or replace a value",
-		Example: "  raftctl put name Alice\n  raftctl put document --file ./document.bin\n  printf hello | raftctl put greeting --stdin",
+		Short:   "Create or replace a JSON value",
+		Example: "  raftctl put name '\"Alice\"'\n  raftctl put document --file ./document.json\n  printf 42 | raftctl put count --stdin",
 		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if (len(args) == 2 && (fromStdin || cmd.Flags().Changed("file"))) ||
@@ -116,15 +116,7 @@ func newCommand() *cobra.Command {
 			}
 
 			if jsonOutput {
-				// []byte has an unambiguous base64 representation, including binary values.
-				if value == nil {
-					value = []byte{}
-				}
-
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-					Key   string `json:"key"`
-					Value []byte `json:"value"`
-				}{args[0], value})
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(kvclient.Record{Key: args[0], Value: value})
 			}
 
 			if cmd.Flags().Changed("output") {
@@ -138,18 +130,14 @@ func newCommand() *cobra.Command {
 
 	get.Flags().StringVar(&output, "output", "", "write exact bytes to this file")
 
-	del := &cobra.Command{
-		Use:     "delete KEY",
-		Aliases: []string{"del"},
-		Short:   "Delete a key (missing keys are accepted)",
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			index, err := client.Delete(cmd.Context(), args[0])
+	logCommand := &cobra.Command{
+		Use: "log", Short: "Show local user commands in log order", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			records, err := client.Log(cmd.Context())
 			if err != nil {
 				return err
 			}
-
-			return writeMutation(cmd, jsonOutput, "deleted", args[0], index)
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
 		},
 	}
 
@@ -183,7 +171,7 @@ func newCommand() *cobra.Command {
 		},
 	}
 
-	root.AddCommand(put, get, del, status)
+	root.AddCommand(put, get, logCommand, status)
 	return root
 }
 

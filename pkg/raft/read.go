@@ -3,8 +3,7 @@ package raft
 import "context"
 
 // ReadIndex confirms leadership with a fresh quorum in the current term.
-// The caller must apply committed entries through the returned index before
-// reading its state machine. No entry is appended for the read itself.
+// It waits for local application through the returned index; no entry is appended.
 func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -45,7 +44,7 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 			}
 		}
 
-		if votes >= (len(n.config.Peers)+1)/2+1 {
+		if votes >= (len(n.config.Peers)+1)/2+1 && n.log.lastApplied >= index {
 			return index, nil
 		}
 

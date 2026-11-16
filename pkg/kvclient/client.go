@@ -77,30 +77,51 @@ func NewWithTransport(endpoint string, timeout time.Duration, transport http.Rou
 	}, nil
 }
 
+type Record struct {
+	Key   string          `json:"key"`
+	Value json.RawMessage `json:"value"`
+}
+
+// Put accepts a JSON-encoded value, preserving its type.
 func (c *Client) Put(ctx context.Context, key string, value []byte) (uint64, error) {
-	return c.mutate(ctx, http.MethodPut, key, value)
-}
-
-func (c *Client) Delete(ctx context.Context, key string) (uint64, error) {
-	return c.mutate(ctx, http.MethodDelete, key, nil)
-}
-
-func (c *Client) mutate(ctx context.Context, method, key string, data []byte) (uint64, error) {
-	body, err := c.do(ctx, method, "/v1/kv/"+url.PathEscape(key), data)
+	data, err := json.Marshal(Record{Key: key, Value: value})
 	if err != nil {
 		return 0, err
 	}
-
+	body, err := c.do(ctx, http.MethodPost, "/query", data)
+	if err != nil {
+		return 0, err
+	}
 	var result struct {
 		Index uint64 `json:"index"`
 	}
-
-	err = json.Unmarshal(body, &result)
-	return result.Index, err
+	_ = json.Unmarshal(body, &result)
+	return result.Index, nil
 }
 
 func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
-	return c.do(ctx, http.MethodGet, "/v1/kv/"+url.PathEscape(key), nil)
+	body, err := c.do(ctx, http.MethodGet, "/query?key="+url.QueryEscape(key), nil)
+	if err != nil {
+		return nil, err
+	}
+	var result Record
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	if result.Key != key || !json.Valid(result.Value) {
+		return nil, fmt.Errorf("invalid query response")
+	}
+	return result.Value, nil
+}
+
+func (c *Client) Log(ctx context.Context) ([]Record, error) {
+	body, err := c.do(ctx, http.MethodGet, "/log", nil)
+	if err != nil {
+		return nil, err
+	}
+	var records []Record
+	err = json.Unmarshal(body, &records)
+	return records, err
 }
 
 func (c *Client) Status(ctx context.Context) (Status, error) {
@@ -120,7 +141,7 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte) ([]by
 		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed (write outcome may be unknown): %w", err)
@@ -128,22 +149,23 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte) ([]by
 
 	defer func() { _ = response.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(body) > 1<<20 {
-		return nil, fmt.Errorf("response too large")
-	}
-
 	if response.StatusCode != http.StatusOK {
 		var detail struct {
-			Error string `json:"error"`
+			Error  string          `json:"error"`
+			Detail json.RawMessage `json:"detail"`
 		}
 
 		if json.Unmarshal(body, &detail) != nil || detail.Error == "" {
-			detail.Error = response.Status
+			if len(detail.Detail) > 0 {
+				detail.Error = string(detail.Detail)
+			} else {
+				detail.Error = response.Status
+			}
 		}
 
 		return nil, &Error{StatusCode: response.StatusCode, Message: detail.Error}

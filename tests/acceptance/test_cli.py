@@ -1,6 +1,4 @@
-import base64
 import json
-import os
 import shutil
 import subprocess
 
@@ -9,46 +7,45 @@ import pytest
 pytestmark = pytest.mark.cli
 
 
-def test_binary_stdin_files_and_json(cluster, follower, key, tmp_path):
-    value = bytes(range(256)) * 1024
-    cluster.ctl(follower, "put", key, "--stdin", data=value)
-    assert cluster.ctl(follower, "get", key).stdout == value
-    output = tmp_path / "value.bin"
+def test_json_stdin_files_and_output(cluster, follower, key, tmp_path):
+    value = {"items": list(range(256)) * 128, "nested": [True, None]}
+    encoded = json.dumps(value).encode()
+    cluster.ctl(follower, "put", key, "--stdin", data=encoded)
+    assert json.loads(cluster.ctl(follower, "get", key).stdout) == value
+    output = tmp_path / "value.json"
     cluster.ctl(follower, "get", key, "--output", str(output))
-    assert output.read_bytes() == value
+    assert json.loads(output.read_bytes()) == value
     cluster.ctl(follower, "put", key + "/file", "--file", str(output))
     result = json.loads(cluster.ctl(follower, "--json", "get", key + "/file").stdout)
-    assert base64.b64decode(result["value"]) == value
-    cluster.ctl(follower, "delete", key)
-    assert b"404" in cluster.ctl(follower, "get", key, ok=False).stderr
+    assert result == {"key": key + "/file", "value": value}
+    records = json.loads(cluster.ctl(follower, "log").stdout)
+    assert any(record == result for record in records)
 
 
 @pytest.mark.parametrize("arguments", [
     ["put", "missing-value"],
     ["put", "key", "value", "--stdin"],
+    ["put", "key", "invalid-json"],
     ["get", "key", "--json", "--output", "unused"],
-], ids=["missing-value", "conflicting-input", "conflicting-output"])
+])
 def test_cli_invalid_arguments(cluster, leader, arguments):
     cluster.ctl(leader, *arguments, ok=False)
 
 
 @pytest.mark.external
-def test_curl_and_grpcurl(cluster, follower, key, tmp_path):
+def test_curl_and_grpcurl(cluster, follower, key):
     for tool in ("curl", "grpcurl"):
         if not shutil.which(tool):
             pytest.skip(f"optional external tool not installed: {tool}")
-    value = bytes(range(256))
-    source = tmp_path / "payload.bin"
-    source.write_bytes(value)
-    url = f"http://127.0.0.1:{cluster.http[follower]}" + cluster.key_path(key)
-    subprocess.run(["curl", "--fail-with-body", "-sS", "-L", "-X", "PUT", "--data-binary", "@" + str(source), url],
+    value = {"array": [1, True, None]}
+    origin = f"http://127.0.0.1:{cluster.http[follower]}"
+    subprocess.run(["curl", "--fail-with-body", "-sS", "-L", "-H", "Content-Type: application/json",
+                    "--data-binary", json.dumps({"key": key, "value": value}), origin + "/query"],
                    check=True, capture_output=True, timeout=10)
-    assert cluster.ctl(follower, "get", key).stdout == value
-    subprocess.run(["curl", "--fail-with-body", "-sS", "-L", "-X", "DELETE", url],
-                   check=True, capture_output=True, timeout=10)
-    response = subprocess.run(["curl", "-sS", "-L", "-o", os.devnull, "-w", "%{http_code}", url],
+    assert json.loads(cluster.ctl(follower, "get", key).stdout) == value
+    response = subprocess.run(["curl", "--fail-with-body", "-sS", "-L", origin + cluster.key_path(key)],
                               check=True, capture_output=True, timeout=10)
-    assert response.stdout == b"404"
+    assert json.loads(response.stdout) == {"key": key, "value": value}
     for i in range(3):
         address = f"127.0.0.1:{cluster.grpc[i]}"
         state = subprocess.run(["grpcurl", "-plaintext", address, "raft.v1.RaftService/GetStatus"],

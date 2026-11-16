@@ -86,7 +86,7 @@ func TestClusterRESTFailoverAndRestart(t *testing.T) {
 	}
 
 	key := "a/../ключ ?#%"
-	value := []byte{0, 255, 1, '\n', 42}
+	value := []byte(`{"nested":[true,null,42,"value"]}`)
 
 	for attempt := range 2 {
 		func() {
@@ -114,25 +114,27 @@ func TestClusterRESTFailoverAndRestart(t *testing.T) {
 
 				journals = append(journals, journal)
 				cfg.Storage = journal
+				adapter := &raftLog{}
+				stores[id] = kv.New(adapter)
+				cfg.StateMachine = stores[id]
 				node, err := raft.NewNode(cfg, transport{net, id})
 				if err != nil {
 					t.Fatal(err)
 				}
 
 				net.nodes[id] = node
-				stores[id] = kv.New(raftLog{node: node})
+				adapter.node = node
 			}
 
 			ctx, cancel := context.WithCancel(t.Context())
-			done := make(chan error, 6)
+			done := make(chan error, 3)
 			for _, id := range ids {
 				go func() { done <- net.nodes[id].Run(ctx) }()
-				go func() { done <- stores[id].Run(ctx) }()
 			}
 
 			defer func() {
 				cancel()
-				for range 6 {
+				for range 3 {
 					if err := <-done; err != nil {
 						t.Error(err)
 					}
@@ -252,14 +254,9 @@ func TestClusterRESTFailoverAndRestart(t *testing.T) {
 				net.mu.Unlock()
 				eventually(t, func() bool { return stores[leader].Status().Role == "follower" })
 			} else {
-				if _, err := clients[follower].Delete(t.Context(), key); err != nil {
-					t.Fatal(err)
-				}
-
-				_, err := clients[follower].Get(t.Context(), key)
-				var response *kvclient.Error
-				if !errors.As(err, &response) || response.StatusCode != 404 {
-					t.Fatalf("delete: %v", err)
+				records, err := clients[follower].Log(t.Context())
+				if err != nil || len(records) != 1 || records[0].Key != key || !bytes.Equal(records[0].Value, value) {
+					t.Fatalf("log after restart: %v %v", records, err)
 				}
 			}
 		}()

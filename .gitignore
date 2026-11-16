@@ -1,6 +1,7 @@
 /docs/*
 !/docs/log-replication.md
 !/docs/state-machine.md
+!/docs/kv-store.md
 /.idea/
 /bin/
 /coverage.out

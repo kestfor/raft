@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,23 +12,28 @@ import (
 	"testing"
 )
 
-func TestCLIBytesRedirectAndStatus(t *testing.T) {
-	value := []byte{0, 255, '\n', 42}
+func TestCLIJSONRedirectAndStatus(t *testing.T) {
+	value := []byte(`{"items":[1,true,null]}`)
 	leader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/status":
 			_, _ = io.WriteString(w, `{"id":"a","role":"leader","term":2,"leader_id":"a","applied_index":3}`)
-		case r.Method == http.MethodPut:
-			got, _ := io.ReadAll(r.Body)
+		case r.Method == http.MethodPost:
+			var input struct {
+				Key   string          `json:"key"`
+				Value json.RawMessage `json:"value"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			got := input.Value
 			if !bytes.Equal(got, value) {
 				t.Errorf("body changed: %v", got)
 			}
 
 			_, _ = io.WriteString(w, `{"index":3}`)
+		case r.URL.Path == "/log":
+			_, _ = io.WriteString(w, `[{"key":"a/b","value":`+string(value)+`}]`)
 		case r.Method == http.MethodGet:
-			_, _ = w.Write(value)
-		case r.Method == http.MethodDelete:
-			_, _ = io.WriteString(w, `{"index":4}`)
+			_, _ = io.WriteString(w, `{"key":"a/b","value":`+string(value)+`}`)
 		}
 	}))
 	defer leader.Close()
@@ -57,7 +61,7 @@ func TestCLIBytesRedirectAndStatus(t *testing.T) {
 		t.Fatalf("get: %v %v", out, err)
 	}
 
-	path := filepath.Join(t.TempDir(), "value.bin")
+	path := filepath.Join(t.TempDir(), "value.json")
 	if _, err := execute(nil, "get", "a/b", "--output", path); err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +76,10 @@ func TestCLIBytesRedirectAndStatus(t *testing.T) {
 
 	out, err := execute(nil, "get", "a/b", "--json")
 	var result struct {
-		Value string `json:"value"`
+		Value json.RawMessage `json:"value"`
 	}
 
-	if err != nil || json.Unmarshal(out, &result) != nil || result.Value != base64.StdEncoding.EncodeToString(value) {
+	if err != nil || json.Unmarshal(out, &result) != nil || !bytes.Equal(result.Value, value) {
 		t.Fatalf("JSON: %s %v", out, err)
 	}
 
@@ -87,7 +91,7 @@ func TestCLIBytesRedirectAndStatus(t *testing.T) {
 		t.Fatalf("status: %s %v", out, err)
 	}
 
-	if _, err := execute(nil, "delete", "a/b"); err != nil {
+	if _, err := execute(nil, "log"); err != nil {
 		t.Fatal(err)
 	}
 

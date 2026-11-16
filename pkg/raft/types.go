@@ -47,6 +47,7 @@ type AppendEntriesResponse struct {
 }
 
 type Status struct {
+	Running      bool
 	ID           NodeID
 	Role         Role
 	Term         uint64

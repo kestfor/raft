@@ -9,17 +9,16 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
-	httpcontract "github.com/kestfor/raft/api/http"
+	httpcontract "github.com/kestfor/raft/api"
 	"github.com/kestfor/raft/internal/kv"
 )
 
 type Store interface {
 	Put(context.Context, string, []byte) (uint64, error)
 	Get(context.Context, string) ([]byte, error)
-	Delete(context.Context, string) (uint64, error)
+	Log() ([]kv.Record, error)
 	Status() kv.Status
 }
 
@@ -33,79 +32,137 @@ func New(store Store, leaders map[string]string, timeout time.Duration) http.Han
 	return &Handler{store: store, leaders: maps.Clone(leaders), timeout: timeout}
 }
 
-// ServeHTTP deliberately avoids ServeMux path cleaning: keys can contain slash,
-// dot segments or repeated slashes, and must survive redirects byte for byte.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		switch r.URL.Path {
-		case "/openapi.yaml":
-			w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
-			_, _ = io.WriteString(w, httpcontract.OpenAPI)
+		case "/openapi.json", "/openapi.yaml":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, httpcontract.ClientOpenAPI)
 			return
 		case "/swagger", "/swagger/":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.WriteString(w, swaggerPage)
 			return
+		case "/v1/status":
+			writeJSON(w, http.StatusOK, h.store.Status())
+			return
+		case "/log":
+			records, err := h.store.Log()
+			if err != nil {
+				h.respondError(w, r, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, records)
+			return
 		}
 	}
-
-	if r.URL.Path == "/v1/status" && r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, h.store.Status())
+	if r.URL.Path != "/query" {
+		if r.URL.Path == "/log" || r.URL.Path == "/v1/status" {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		} else {
+			writeError(w, http.StatusNotFound, "unknown endpoint")
+		}
 		return
 	}
-
-	if !strings.HasPrefix(r.URL.Path, "/v1/kv/") {
-		writeError(w, http.StatusNotFound, "unknown endpoint")
-		return
-	}
-
-	if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete {
-		w.Header().Set("Allow", "GET, PUT, DELETE")
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
 	if h.store.Status().Role != "leader" {
 		h.redirect(w, r)
 		return
 	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), h.timeout)
 	defer cancel()
-
-	key := strings.TrimPrefix(r.URL.Path, "/v1/kv/")
-	var index uint64
-	var err error
-
-	switch r.Method {
-	case http.MethodGet:
-		var value []byte
-		value, err = h.store.Get(ctx, key)
-		if err == nil {
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write(value)
+	if r.Method == http.MethodGet {
+		values, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			validationError(w, []any{"query"}, "Invalid query string", "value_error")
 			return
 		}
-	case http.MethodPut:
-		r.Body = http.MaxBytesReader(w, r.Body, kv.MaxValueSize)
-		var value []byte
-		value, err = io.ReadAll(r.Body)
-		if err == nil {
-			index, err = h.store.Put(ctx, key, value)
+		keys, ok := values["key"]
+		if !ok {
+			validationError(w, []any{"query", "key"}, "Field required", "missing")
+			return
 		}
-	case http.MethodDelete:
-		index, err = h.store.Delete(ctx, key)
+		key := keys[len(keys)-1]
+		if key == "" {
+			validationError(w, []any{"query", "key"}, "String should have at least 1 character", "string_too_short")
+			return
+		}
+		value, err := h.store.Get(ctx, key)
+		if err != nil {
+			h.respondError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, kv.Record{Key: key, Value: value})
+		return
 	}
-
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	var input map[string]json.RawMessage
+	if err := decoder.Decode(&input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			h.respondError(w, r, err)
+		} else {
+			validationError(w, []any{"body"}, "Invalid JSON object", "json_invalid")
+		}
+		return
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			h.respondError(w, r, err)
+		} else {
+			validationError(w, []any{"body"}, "Unexpected trailing data", "json_invalid")
+		}
+		return
+	}
+	keyData, ok := input["key"]
+	if !ok {
+		validationError(w, []any{"body", "key"}, "Field required", "missing")
+		return
+	}
+	var key string
+	if len(keyData) == 0 || keyData[0] != '"' || json.Unmarshal(keyData, &key) != nil {
+		validationError(w, []any{"body", "key"}, "Input should be a valid string", "string_type")
+		return
+	}
+	value, ok := input["value"]
+	if !ok {
+		validationError(w, []any{"body", "value"}, "Field required", "missing")
+		return
+	}
+	if !kv.ValidValue(value) {
+		validationError(w, []any{"body", "value"}, "Expected string, number, array, object or null", "value_error")
+		return
+	}
+	if len(value) > kv.MaxValueSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "value exceeds 512 KiB")
+		return
+	}
+	index, err := h.store.Put(ctx, key, value)
 	if err != nil {
 		h.respondError(w, r, err)
 		return
 	}
-
 	writeJSON(w, http.StatusOK, struct {
 		Index uint64 `json:"index"`
 	}{index})
+}
+
+func validationError(w http.ResponseWriter, loc []any, message, kind string) {
+	type detail struct {
+		Loc     []any  `json:"loc"`
+		Message string `json:"msg"`
+		Type    string `json:"type"`
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, struct {
+		Detail []detail `json:"detail"`
+	}{[]detail{{loc, message, kind}}})
 }
 
 func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
@@ -134,9 +191,9 @@ func (h *Handler) respondError(w http.ResponseWriter, r *http.Request, err error
 	case errors.Is(err, kv.ErrNotLeader):
 		h.redirect(w, r)
 	case errors.As(err, &tooLarge):
-		writeError(w, http.StatusRequestEntityTooLarge, "value exceeds 512 KiB")
+		writeError(w, http.StatusRequestEntityTooLarge, "request too large")
 	case errors.Is(err, kv.ErrInvalid):
-		writeError(w, http.StatusBadRequest, err.Error())
+		validationError(w, []any{"body"}, err.Error(), "value_error")
 	case errors.Is(err, kv.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):

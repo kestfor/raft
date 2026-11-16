@@ -193,10 +193,15 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 		}
 	}()
 
+	log := &raftLog{}
+	store := kv.New(log)
+	raftConfig.StateMachine = store
 	node, err := raft.NewNode(raftConfig, client)
 	if err != nil {
 		return err
 	}
+
+	log.node = node
 
 	listener, err := net.Listen("tcp", cfg.Raft.ListenAddress)
 	if err != nil {
@@ -214,7 +219,6 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	store := kv.New(raftLog{node: node})
 	httpListener, err := net.Listen("tcp", cfg.HTTP.ListenAddress)
 	if err != nil {
 		return fmt.Errorf("HTTP listen: %w", err)
@@ -231,9 +235,8 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 		MaxHeaderBytes:    16 << 10,
 	}
 
-	done := make(chan error, 4)
+	done := make(chan error, 3)
 	go func() { done <- node.Run(ctx) }()
-	go func() { done <- store.Run(ctx) }()
 	go func() {
 		err := server.Serve(listener)
 		if errors.Is(err, grpc.ErrServerStopped) {
@@ -252,7 +255,7 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 	}()
 
 	logger.InfoContext(ctx, "node listening", "grpc", listener.Addr().String(), "http", httpListener.Addr().String())
-	remaining := 4
+	remaining := 3
 	select {
 	case <-ctx.Done():
 	case result = <-done:

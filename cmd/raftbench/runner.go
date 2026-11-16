@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -68,7 +69,7 @@ type workerResult struct {
 // benchmark is closed-loop: each worker starts its next operation only after
 // the preceding one finishes. There is no rate limiter, retry or pipelining.
 func benchmark(ctx context.Context, client storeClient, cfg settings, workload, prefix string, p *progress) result {
-	value := bytes.Repeat([]byte("x"), cfg.Size)
+	value := benchmarkValue(cfg.Size)
 	keys := make([]string, cfg.Keyspace)
 	for i := range keys {
 		keys[i] = prefix + strconv.Itoa(i)
@@ -204,4 +205,9 @@ func summarize(samples []time.Duration) *latency {
 		P99:  percentile(.99),
 		Max:  percentile(1),
 	}
+}
+
+func benchmarkValue(size int) []byte {
+	value, _ := json.Marshal(string(bytes.Repeat([]byte("x"), size)))
+	return value
 }

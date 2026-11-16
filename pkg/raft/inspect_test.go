@@ -68,4 +68,12 @@ func TestLogSnapshotEmptyAndByteLimit(t *testing.T) {
 	if err != nil || len(page.Entries) != 4 || page.LastLogIndex != 5 {
 		t.Fatalf("byte limit: count=%d, last=%d, err=%v", len(page.Entries), page.LastLogIndex, err)
 	}
+	entries := n.LogEntries()
+	if len(entries) != 5 || entries[0].Index != 1 || entries[4].Index != 5 {
+		t.Fatalf("full log omitted entries: count=%d", len(entries))
+	}
+	entries[0].Data[0] = 'X'
+	if n.log.entries[1].Data[0] != 0 {
+		t.Fatal("full log snapshot aliases entry data")
+	}
 }

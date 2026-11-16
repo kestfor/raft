@@ -12,7 +12,7 @@ const swaggerPage = `<!doctype html>
   <div id="swagger-ui"></div>
   <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.3/swagger-ui-bundle.js"></script>
   <script>
-    SwaggerUIBundle({url: '/openapi.yaml', dom_id: '#swagger-ui',
+    SwaggerUIBundle({url: '/openapi.json', dom_id: '#swagger-ui',
       deepLinking: true, validatorUrl: null, displayRequestDuration: true});
   </script>
 </body>

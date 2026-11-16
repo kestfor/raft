@@ -44,3 +44,10 @@ func (n *Node) Log(from uint64, limit int) (LogSnapshot, error) {
 	page.Entries = cloneEntries(n.log.entries[from:end])
 	return page, nil
 }
+
+// LogEntries returns an owned snapshot of the entire local log, excluding index zero.
+func (n *Node) LogEntries() []Entry {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return cloneEntries(n.log.entries[1:])
+}

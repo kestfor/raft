@@ -1,7 +1,6 @@
 """Owned local test cluster and lifecycle CLI. Test scenarios live in test_*.py."""
 
 import argparse
-import hashlib
 import http.client
 import http.server
 import json
@@ -173,7 +172,7 @@ class Cluster:
             parsed = urllib.parse.urlsplit(origin)
             conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
             try:
-                conn.request(method, path, body=data, headers={"Content-Type": "application/octet-stream"})
+                conn.request(method, path, body=data, headers={"Content-Type": "application/json"})
                 response = conn.getresponse()
                 code, headers, body = response.status, dict(response.getheaders()), response.read()
             finally:
@@ -223,16 +222,16 @@ class Cluster:
 
     @staticmethod
     def key_path(key):
-        return "/v1/kv/" + urllib.parse.quote(key, safe="")
+        return "/query?" + urllib.parse.urlencode({"key": key})
 
     def put(self, i, key, value):
-        code, _, body = self.request(i, "PUT", self.key_path(key), value)
+        code, _, body = self.request(i, "POST", "/query", json.dumps({"key": key, "value": value}, ensure_ascii=False).encode())
         assert code == 200, (key, code, body)
         return json.loads(body)["index"]
 
     def get(self, i, key, value):
         code, _, body = self.request(i, "GET", self.key_path(key))
-        assert code == 200 and body == value, (key, code, hashlib.sha256(body).hexdigest())
+        assert code == 200 and json.loads(body) == {"key": key, "value": value}, (key, code, body[:1000])
 
     def members(self):
         return list(self.processes)

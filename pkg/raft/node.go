@@ -523,6 +523,7 @@ func (n *Node) randomElectionTimeout() time.Duration {
 
 func (n *Node) status() Status {
 	return Status{
+		Running:      n.runtime.running,
 		ID:           n.config.ID,
 		Role:         n.election.role,
 		Term:         n.election.currentTerm,

@@ -14,9 +14,9 @@ type raftLog struct{ node *raft.Node }
 
 var _ kv.Log = raftLog{}
 
-func (l raftLog) Propose(ctx context.Context, data []byte) (uint64, error) {
-	index, _, err := l.node.Propose(ctx, data)
-	return index, translate(err)
+func (l raftLog) Propose(ctx context.Context, data []byte) (uint64, any, error) {
+	index, value, err := l.node.Propose(ctx, data)
+	return index, value, translate(err)
 }
 
 func (l raftLog) ReadIndex(ctx context.Context) (uint64, error) {
@@ -24,19 +24,7 @@ func (l raftLog) ReadIndex(ctx context.Context) (uint64, error) {
 	return index, translate(err)
 }
 
-func (l raftLog) CommittedEntries(ctx context.Context, after uint64) ([]kv.Entry, error) {
-	entries, err := l.node.CommittedEntries(ctx, after)
-	if err != nil {
-		return nil, translate(err)
-	}
-
-	result := make([]kv.Entry, len(entries))
-	for i, entry := range entries {
-		result[i] = kv.Entry{Index: entry.Index, Data: entry.Data, NoOp: entry.NoOp}
-	}
-
-	return result, nil
-}
+func (l raftLog) LogEntries() []raft.Entry { return l.node.LogEntries() }
 
 func (l raftLog) Status() kv.Status {
 	s := l.node.Status()
@@ -48,6 +36,8 @@ func (l raftLog) Status() kv.Status {
 		LeaderID:     string(s.LeaderID),
 		LastLogIndex: s.LastLogIndex,
 		CommitIndex:  s.CommitIndex,
+		AppliedIndex: s.AppliedIndex,
+		Available:    s.Running,
 	}
 }
 
@@ -55,6 +45,8 @@ func translate(err error) error {
 	switch {
 	case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrLeadershipLost):
 		return errors.Join(kv.ErrNotLeader, err)
+	case errors.Is(err, raft.ErrInvalidRequest):
+		return errors.Join(kv.ErrInvalid, err)
 	case errors.Is(err, raft.ErrNotRunning):
 		return errors.Join(kv.ErrUnavailable, err)
 	default:

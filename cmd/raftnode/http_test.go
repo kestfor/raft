@@ -50,7 +50,7 @@ func TestRunServesHTTPAndStops(t *testing.T) {
 	}
 	t.Cleanup(stop)
 
-	client := &http.Client{Timeout: time.Second}
+	client := &http.Client{Timeout: time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}
 	defer client.CloseIdleConnections()
 	base := "http://" + address
 	deadline := time.Now().Add(5 * time.Second)
@@ -61,6 +61,7 @@ func TestRunServesHTTPAndStops(t *testing.T) {
 				Role string `json:"role"`
 			}
 			err = json.NewDecoder(response.Body).Decode(&status)
+			_, _ = io.Copy(io.Discard, response.Body)
 			_ = response.Body.Close()
 			if err == nil && status.Role == "leader" {
 				break
@@ -77,9 +78,14 @@ func TestRunServesHTTPAndStops(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	data := []byte{0, 0xff, 1}
+	data := []byte(`{"answer":42}`)
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/v1/kv/test", bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		base+"/query",
+		bytes.NewReader([]byte(`{"key":"test","value":`+string(data)+`}`)),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,19 +93,26 @@ func TestRunServesHTTPAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, _ = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("put: %d", response.StatusCode)
 	}
-	response, err = client.Get(base + "/v1/kv/test")
+	response, err = client.Get(base + "/query?key=test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := io.ReadAll(response.Body)
+	var record struct {
+		Value json.RawMessage `json:"value"`
+	}
+	err = json.NewDecoder(response.Body).Decode(&record)
+	got := record.Value
+	_, _ = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("get: %q, %v", got, err)
 	}
+	client.CloseIdleConnections()
 	stop()
 	journal, err := wal.Open(filepath.Join(cfg.Raft.DataDir, "raft.wal"))
 	if err != nil {
