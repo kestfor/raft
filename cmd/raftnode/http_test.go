@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/kestfor/raft/internal/config"
-	"github.com/kestfor/raft/pkg/wal"
 )
 
 func TestRunServesHTTPAndStops(t *testing.T) {
@@ -107,12 +107,8 @@ func TestRunServesHTTPAndStops(t *testing.T) {
 		t.Fatalf("log: %+v, %v", page, err)
 	}
 	stop()
-	journal, err := wal.Open(filepath.Join(cfg.DataDir, "raft.wal"))
-	if err != nil {
-		t.Fatalf("shutdown did not release WAL: %v", err)
-	}
-	if err := journal.Close(); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "raft.wal")); !os.IsNotExist(err) {
+		t.Fatalf("expected an in-memory journal, stat raft.wal: %v", err)
 	}
 }
 
@@ -128,9 +124,4 @@ func TestRunClosesResourcesIfHTTPListenFails(t *testing.T) {
 	if err := run(t.Context(), cfg); err == nil {
 		t.Fatal("started HTTP on an occupied port")
 	}
-	journal, err := wal.Open(filepath.Join(cfg.DataDir, "raft.wal"))
-	if err != nil {
-		t.Fatalf("startup failure did not release WAL: %v", err)
-	}
-	defer func() { _ = journal.Close() }()
 }
