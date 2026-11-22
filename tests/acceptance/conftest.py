@@ -76,4 +76,4 @@ def pytest_runtest_makereport(item, call):
 
 
 def pytest_report_header(config):
-    return "Raft acceptance: real processes + WAL + TCP partitions; scenarios run sequentially"
+    return "Raft acceptance: real processes + in-memory journals + TCP partitions; scenarios run sequentially"

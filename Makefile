@@ -48,7 +48,7 @@ $(VENV)/.requirements-installed: tests/requirements.txt
 node: build-node ## Run one node in foreground (CONFIG=..., NODE_ARGS=...)
 	bin/raftnode --config "$(CONFIG)" $(NODE_ARGS)
 
-cluster-up: build-node build-ctl ## Start 3 managed test nodes with separate WALs
+cluster-up: build-node build-ctl ## Start 3 managed test nodes with in-memory journals
 	$(PYTHON) -m tests.acceptance.cluster up --state "$(CLUSTER_STATE)"
 
 cluster-status: ## Show managed node addresses, roles, PIDs and log progress
@@ -63,10 +63,10 @@ cluster-endpoint: ## Print the current managed leader's REST URL
 cluster-logs: ## Show node logs (LOG_LINES=50, LOG_ARGS=--follow)
 	@$(PYTHON) -m tests.acceptance.cluster logs --state "$(CLUSTER_STATE)" --lines $(LOG_LINES) $(LOG_ARGS)
 
-cluster-down: ## Stop the selected cluster; retain WALs and logs
+cluster-down: ## Stop the selected cluster; retain process logs
 	$(PYTHON) -m tests.acceptance.cluster down --state "$(CLUSTER_STATE)"
 
-cluster-restart: build-node ## Restart managed nodes with the same WALs and configs
+cluster-restart: build-node ## Restart managed nodes with the same configs and empty KV state
 	$(PYTHON) -m tests.acceptance.cluster restart --state "$(CLUSTER_STATE)"
 
 ##@ Clients and performance

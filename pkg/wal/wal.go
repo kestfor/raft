@@ -36,8 +36,13 @@ type Log struct {
 
 // Open validates the file, discards an incomplete final record, and syncs the
 // recovered contents before they can be acknowledged again. Checksum failures
-// are reported, never repaired. The parent directory must exist.
+// are reported, never repaired. Missing parent directories are created and synced.
 func Open(path string) (*Log, error) {
+	parent := filepath.Dir(path)
+	if err := makeDataDir(parent); err != nil {
+		return nil, fmt.Errorf("wal: prepare directory: %w", err)
+	}
+
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("wal: open: %w", err)
@@ -62,17 +67,45 @@ func Open(path string) (*Log, error) {
 	}
 
 	// Make creation durable as well as writes to the file itself.
-	dir, err := os.Open(filepath.Dir(path))
-	if err == nil {
-		err = errors.Join(dir.Sync(), dir.Close())
-	}
-
-	if err != nil {
+	if err := syncDir(parent); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("wal: sync directory: %w", err)
 	}
 
 	return l, nil
+}
+
+// Sync each newly created directory's parent so the WAL's path survives a crash.
+func makeDataDir(path string) error {
+	if info, err := os.Stat(path); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("data path %q is not a directory", path)
+		}
+
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	parent := filepath.Dir(path)
+	if err := makeDataDir(parent); err != nil {
+		return err
+	}
+
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+
+	return syncDir(parent)
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func (l *Log) initialize() error {

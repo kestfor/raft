@@ -6,9 +6,9 @@ import (
 	"slices"
 )
 
-// Storage is an append-only journal, such as wal.Log. Append must make a record
-// durable before returning success. Replay returns complete records in order.
-// The caller owns Storage and closes it after Run and all callers have finished.
+// Storage appends whole records and replays them in order. Crash recovery
+// requires a backend that makes each record durable before Append returns.
+// The caller owns Storage for the lifetime of the node.
 type Storage interface {
 	Append([]byte) error
 	Replay(func([]byte) error) error

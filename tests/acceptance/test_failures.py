@@ -1,6 +1,5 @@
 import json
 import socket
-import subprocess
 
 import pytest
 
@@ -33,15 +32,12 @@ def test_isolated_leader_cannot_read_or_commit(cluster, leader, key):
 
 
 def test_lost_quorum_and_client_cancellation(cluster, leader, key):
-    others = [i for i in range(3) if i != leader]
-    for i in others:
-        cluster.stop(i)
+    cluster.partition(leader)
     for method, path, body in [("GET", cluster.key_path(key), None), ("POST", "/query", json.dumps({"key": key, "value": "maybe"}).encode())]:
         assert cluster.request(leader, method, path, body, follow=False)[0] == 504
     with pytest.raises((TimeoutError, socket.timeout)):
         cluster.request(leader, "POST", "/query", json.dumps({"key": key + "/canceled", "value": "maybe"}).encode(), timeout=.05)
-    for i in others:
-        cluster.start(i)
+    cluster.partition(None)
     cluster.wait_leader()
     cluster.catch_up()
     cluster.put(leader, key, "healthy")
@@ -60,23 +56,21 @@ def test_leader_crash_and_new_writes(cluster, leader, key):
     cluster.get(leader, key, "after")
 
 
-def test_full_cluster_crash_and_wal_recovery(cluster, leader, key):
-    values = {key + f"/{i}": {"bytes": list(range(256)) * (i + 1)} for i in range(24)}
-    for name, value in values.items():
-        cluster.put(leader, name, value)
+def test_full_cluster_restart_starts_empty(cluster, leader, key, request):
+    if request.config.getoption("--cluster-manifest"):
+        pytest.skip("full restart clears the attached cluster")
+    cluster.put(leader, key, "before")
     cluster.catch_up()
     for i in range(3):
         cluster.stop(i, crash=True)
     for i in range(3):
         cluster.start(i)
-    cluster.wait_leader()
+    leader = cluster.wait_leader()
     cluster.catch_up()
-    for i, (name, value) in enumerate(values.items()):
-        cluster.get(i % 3, name, value)
-
-
-def test_wal_prevents_second_writer(cluster):
-    result = subprocess.run([cluster.args.node, "--config", str(cluster.root / "node1.yaml")],
-                            capture_output=True, timeout=5)
-    assert result.returncode != 0
-    assert b"already open" in result.stderr
+    assert cluster.request(leader, "GET", cluster.key_path(key))[0] == 404
+    for i in range(3):
+        code, _, body = cluster.request(i, "GET", "/log", follow=False)
+        assert code == 200 and json.loads(body) == []
+    cluster.put(leader, key, "after")
+    cluster.catch_up()
+    cluster.get((leader + 1) % 3, key, "after")

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -167,17 +166,7 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 	logger := newLogger(cfg.Log, os.Stdout)
 	raftConfig := cfg.Raft.NodeConfig()
 	raftConfig.Logger = logger
-	if err := makeDataDir(cfg.Raft.DataDir); err != nil {
-		return err
-	}
-
-	journal, err := wal.Open(filepath.Join(cfg.Raft.DataDir, "raft.wal"))
-	if err != nil {
-		return err
-	}
-
-	defer func() { result = errors.Join(result, journal.Close()) }()
-	raftConfig.Storage = journal
+	raftConfig.Storage = &wal.Memory{}
 
 	client, err := grpctransport.NewClient(
 		cfg.Raft.PeerAddresses(),
@@ -298,36 +287,6 @@ func newLogger(cfg config.LogConfig, output io.Writer) *slog.Logger {
 	}
 
 	return slog.New(handler)
-}
-
-// Sync each newly created directory's parent so the WAL's path survives a crash.
-func makeDataDir(path string) error {
-	path = filepath.Clean(path)
-	if info, err := os.Stat(path); err == nil {
-		if !info.IsDir() {
-			return fmt.Errorf("data path %q is not a directory", path)
-		}
-
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
-	parent := filepath.Dir(path)
-	if err := makeDataDir(parent); err != nil {
-		return err
-	}
-
-	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("create data directory: %w", err)
-	}
-
-	dir, err := os.Open(parent)
-	if err != nil {
-		return err
-	}
-
-	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func stopServer(server *grpc.Server) {

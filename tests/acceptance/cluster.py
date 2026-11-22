@@ -538,7 +538,7 @@ def main():
             time.sleep(.1)
         if state.exists():
             raise RuntimeError("cluster shutdown did not finish")
-        print("Test cluster stopped. WALs and logs retained.")
+        print("Test cluster stopped. Process logs retained.")
     else:
         for binary in (args.node, args.ctl):
             if not Path(binary).is_file():
@@ -570,7 +570,7 @@ def main():
                     print("Test cluster ready:")
                     for i, port in enumerate(remote.http):
                         print(f"  node{i+1}: http://127.0.0.1:{port}")
-                    print(f"State: {state}\nLogs/WAL: {remote.root}")
+                    print(f"State: {state}\nLogs: {remote.root}")
                     return
             except (OSError, ValueError, KeyError):
                 pass

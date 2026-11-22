@@ -32,7 +32,7 @@ func records(t *testing.T, l *Log) [][]byte {
 }
 
 func TestAppendReplayAndReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "log")
+	path := filepath.Join(t.TempDir(), "data", "node", "log")
 	l := openLog(t, path)
 	want := [][]byte{[]byte("first"), {}, {0, 255, 1}, []byte("last")}
 	for _, data := range want {
