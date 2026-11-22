@@ -15,17 +15,21 @@ type proposalID struct {
 // Errors after append include its index; cancellation does not roll it back.
 func (n *Node) Propose(ctx context.Context, data []byte) (uint64, any, error) {
 	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	entry, err := n.appendCommand(ctx, data)
 	if err != nil {
-		n.mu.Unlock()
 		return 0, nil, err
 	}
 
 	id := proposalID{index: entry.Index, term: entry.Term}
 	n.log.pending[id] = nil
-	n.mu.Unlock()
+	defer delete(n.log.pending, id)
 
-	value, err := n.waitForResult(ctx, id)
+	if err := n.waitForCommit(ctx, id); err != nil {
+		return entry.Index, nil, err
+	}
+	value, err := n.waitForApplied(ctx, id)
 	return entry.Index, value, err
 }
 
@@ -51,43 +55,41 @@ func (n *Node) appendCommand(ctx context.Context, data []byte) (Entry, error) {
 	return entry, nil
 }
 
-func (n *Node) waitForResult(ctx context.Context, id proposalID) (any, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	defer delete(n.log.pending, id)
-
-	for {
-		committed := id.index <= n.log.commitIndex && n.log.entries[id.index].Term == id.term
-		if committed && id.index <= n.log.lastApplied {
-			return n.log.pending[id], nil
+// Both waits are called with mu held and release it while sleeping.
+func (n *Node) waitForCommit(ctx context.Context, id proposalID) error {
+	for id.index > n.log.commitIndex || n.log.entries[id.index].Term != id.term {
+		if err := n.checkRunning(ctx); err != nil {
+			return err
 		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		if n.election.role != Leader || n.election.currentTerm != id.term {
+			return ErrLeadershipLost
 		}
-		if n.runtime.failure != nil {
-			return nil, n.runtime.failure
-		}
-		if !n.runtime.running {
-			return nil, ErrNotRunning
-		}
-
-		if !committed && (n.election.role != Leader || n.election.currentTerm != id.term) {
-			return nil, ErrLeadershipLost
-		}
-
-		changed := n.log.changed
-		n.mu.Unlock()
-
-		select {
-		case <-ctx.Done():
-		case <-changed:
-		}
-
-		n.mu.Lock()
+		n.waitForLogChange(ctx)
 	}
+	return nil
 }
 
-func (n *Node) canPropose(ctx context.Context) error {
+func (n *Node) waitForApplied(ctx context.Context, id proposalID) (any, error) {
+	for n.log.lastApplied < id.index {
+		if err := n.checkRunning(ctx); err != nil {
+			return nil, err
+		}
+		n.waitForLogChange(ctx)
+	}
+	return n.log.pending[id], nil
+}
+
+func (n *Node) waitForLogChange(ctx context.Context) {
+	changed := n.log.changed
+	n.mu.Unlock()
+	select {
+	case <-ctx.Done():
+	case <-changed:
+	}
+	n.mu.Lock()
+}
+
+func (n *Node) checkRunning(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -99,7 +101,13 @@ func (n *Node) canPropose(ctx context.Context) error {
 	if !n.runtime.running {
 		return ErrNotRunning
 	}
+	return nil
+}
 
+func (n *Node) canPropose(ctx context.Context) error {
+	if err := n.checkRunning(ctx); err != nil {
+		return err
+	}
 	if n.election.role != Leader {
 		return ErrNotLeader
 	}
