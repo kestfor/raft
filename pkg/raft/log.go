@@ -5,13 +5,22 @@ import (
 	"fmt"
 	"math"
 	"slices"
+
+	"github.com/kestfor/raft/internal/limits"
 )
 
 const (
-	MaxCommandSize   = 1 << 20
+	MaxCommandSize   = limits.Command
 	maxAppendEntries = 64
 	maxAppendBytes   = 1 << 20
 )
+
+func validateCommandSize(size int) error {
+	if size > MaxCommandSize {
+		return fmt.Errorf("%w: command exceeds %d bytes", ErrInvalidRequest, MaxCommandSize)
+	}
+	return nil
+}
 
 func (n *Node) AppendEntries(ctx context.Context, req AppendEntriesRequest) (AppendEntriesResponse, error) {
 	n.mu.Lock()
@@ -95,16 +104,18 @@ func validateEntries(prevIndex, prevTerm, term uint64, entries []Entry) error {
 			return fmt.Errorf("%w: invalid index or term at entry %d", ErrInvalidRequest, i)
 		}
 
-		if len(entry.Data) > MaxCommandSize || (entry.NoOp && len(entry.Data) != 0) {
+		if err := validateCommandSize(len(entry.Data)); err != nil {
+			return err
+		}
+		if entry.NoOp && len(entry.Data) != 0 {
 			return fmt.Errorf("%w: invalid command at entry %d", ErrInvalidRequest, i)
 		}
 
+		if len(entries) > 1 && len(entry.Data) > maxAppendBytes-size {
+			return fmt.Errorf("%w: entries exceed batch size", ErrInvalidRequest)
+		}
 		size += len(entry.Data)
 		prevTerm = entry.Term
-	}
-
-	if size > maxAppendBytes {
-		return fmt.Errorf("%w: entries exceed batch size", ErrInvalidRequest)
 	}
 
 	return nil
@@ -127,7 +138,7 @@ func (n *Node) replicatePeer(ctx context.Context, peer NodeID) {
 	size := 0
 	for end <= n.lastIndex() && end-next < maxAppendEntries {
 		entrySize := len(n.log.entries[end].Data)
-		if size+entrySize > maxAppendBytes {
+		if end > next && entrySize > maxAppendBytes-size {
 			break
 		}
 

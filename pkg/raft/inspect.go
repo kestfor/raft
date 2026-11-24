@@ -12,7 +12,7 @@ type LogSnapshot struct {
 
 // Log returns independent copies of at most limit entries starting at from
 // (inclusive). Index zero is the internal empty prefix and cannot be requested.
-// Pages are also bounded to 4 MiB of command data. Separate pages may observe
+// A page targets 4 MiB of command data. A larger entry gets its own page. Pages may observe
 // different log versions when an uncommitted suffix is replaced.
 func (n *Node) Log(from uint64, limit int) (LogSnapshot, error) {
 	if from == 0 || limit <= 0 {
@@ -33,7 +33,7 @@ func (n *Node) Log(from uint64, limit int) (LogSnapshot, error) {
 	size := 0
 	for end <= page.LastLogIndex && end-from < uint64(limit) {
 		entrySize := len(n.log.entries[end].Data)
-		if size+entrySize > 4*MaxCommandSize {
+		if end > from && entrySize > (4<<20)-size {
 			break
 		}
 

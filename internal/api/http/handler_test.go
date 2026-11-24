@@ -118,9 +118,9 @@ func TestRejectsInvalidQueriesAndRoutes(t *testing.T) {
 }
 
 func TestProposeBinaryBodyAndLimits(t *testing.T) {
-	for _, size := range []int{0, 3, raft.MaxCommandSize, raft.MaxCommandSize + 1} {
+	for _, size := range []int{0, 3, (1 << 20) + 1, raft.MaxCommandSize + 1} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
-			data := bytes.Repeat([]byte{0xff}, size)
+			data := bytes.Repeat([]byte{0xff}, min(size, (1<<20)+1))
 			called := false
 			node := &stubNode{propose: func(ctx context.Context, got []byte) (uint64, error) {
 				called = true
@@ -134,7 +134,9 @@ func TestProposeBinaryBodyAndLimits(t *testing.T) {
 				return 7, nil
 			}}
 			w := httptest.NewRecorder()
-			NewHandler(node).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/propose", bytes.NewReader(data)))
+			req := httptest.NewRequest(http.MethodPost, "/v1/propose", bytes.NewReader(data))
+			req.ContentLength = int64(size)
+			NewHandler(node).ServeHTTP(w, req)
 			if size > raft.MaxCommandSize {
 				if w.Code != http.StatusRequestEntityTooLarge || called {
 					t.Fatalf("oversized proposal: %d, called=%t", w.Code, called)

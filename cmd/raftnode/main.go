@@ -17,6 +17,7 @@ import (
 	charmlog "charm.land/log/v2"
 	httpapi "github.com/kestfor/raft/internal/api/http"
 	"github.com/kestfor/raft/internal/config"
+	"github.com/kestfor/raft/internal/limits"
 	grpctransport "github.com/kestfor/raft/internal/transport/grpc"
 	"github.com/kestfor/raft/pkg/raft"
 	"github.com/kestfor/raft/pkg/wal"
@@ -177,7 +178,7 @@ func run(ctx context.Context, cfg config.Config) (result error) {
 
 	defer func() { _ = httpListener.Close() }()
 
-	server := grpc.NewServer()
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(limits.GRPCMessage))
 	grpctransport.Register(server, node)
 	reflection.Register(server)
 	healthServer := health.NewServer()

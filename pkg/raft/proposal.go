@@ -2,7 +2,6 @@ package raft
 
 import (
 	"context"
-	"fmt"
 	"slices"
 )
 
@@ -39,8 +38,8 @@ func (n *Node) appendCommand(ctx context.Context, data []byte) (Entry, error) {
 		return Entry{}, err
 	}
 
-	if len(data) > MaxCommandSize {
-		return Entry{}, fmt.Errorf("%w: command exceeds %d bytes", ErrInvalidRequest, MaxCommandSize)
+	if err := validateCommandSize(len(data)); err != nil {
+		return Entry{}, err
 	}
 
 	entry := Entry{Index: n.lastIndex() + 1, Term: n.election.currentTerm, Data: slices.Clone(data)}

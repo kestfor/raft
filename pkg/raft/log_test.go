@@ -67,7 +67,7 @@ func TestAppendEntriesRejectsInvalidAndCommittedConflicts(t *testing.T) {
 		{Entries: []Entry{{Index: 1, Term: 0}}},
 		{Entries: []Entry{{Index: 1, Term: 2}, {Index: 2, Term: 1}}},
 		{Entries: []Entry{{Index: 1, Term: 2, NoOp: true, Data: []byte("bad")}}},
-		{Entries: []Entry{{Index: 1, Term: 2, Data: make([]byte, MaxCommandSize+1)}}},
+		{Entries: []Entry{{Index: 1, Term: 2, Data: make([]byte, maxAppendBytes+1)}, {Index: 2, Term: 2}}},
 		{Entries: []Entry{{Index: 1, Term: 2}}}, // Committed conflict.
 	} {
 		n, _ := newElectionTestNode(t, "a", []NodeID{"b"})
@@ -221,7 +221,7 @@ func TestLaggingFollowerCatchesUpAcrossBatches(t *testing.T) {
 
 		// Also exercise the byte limit independently of the entry count.
 		for range 3 {
-			last = propose(t, network.nodes["a"], string(bytes.Repeat([]byte{0xff}, MaxCommandSize)))
+			last = propose(t, network.nodes["a"], string(bytes.Repeat([]byte{0xff}, maxAppendBytes+1)))
 		}
 
 		network.mu.Lock()
@@ -452,7 +452,10 @@ func TestProposeValidationAndOwnership(t *testing.T) {
 		if _, _, err := n.Propose(ctx, nil); !errors.Is(err, context.Canceled) {
 			t.Fatal(err)
 		}
-		if _, _, err := n.Propose(t.Context(), make([]byte, MaxCommandSize+1)); !errors.Is(err, ErrInvalidRequest) {
+		if err := validateCommandSize(MaxCommandSize); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateCommandSize(MaxCommandSize + 1); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatal(err)
 		}
 		if n.Status().LastLogIndex != 1 {

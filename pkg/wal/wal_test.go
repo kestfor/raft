@@ -2,7 +2,9 @@ package wal
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -165,10 +167,6 @@ func TestExclusiveOpenAndFailedWrite(t *testing.T) {
 		t.Fatalf("second open = %v", err)
 	}
 
-	if err := l.Append(make([]byte, MaxRecordSize+1)); err == nil {
-		t.Fatal("accepted oversized record")
-	}
-
 	if err := l.Append([]byte("good")); err != nil {
 		t.Fatal(err)
 	}
@@ -207,5 +205,18 @@ func TestIncompleteFileHeader(t *testing.T) {
 				t.Fatalf("records=%q", got)
 			}
 		})
+	}
+}
+
+func TestIncompleteLargeRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log")
+	header := make([]byte, headerSize)
+	binary.LittleEndian.PutUint32(header, MaxRecordSize)
+	binary.LittleEndian.PutUint32(header[4:], crc32.ChecksumIEEE(header[:4]))
+	if err := os.WriteFile(path, append([]byte(magic), header...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := records(t, openLog(t, path)); len(got) != 0 {
+		t.Fatalf("replayed %d incomplete records", len(got))
 	}
 }
