@@ -90,11 +90,12 @@ func (n *Node) CommittedEntries(ctx context.Context, after uint64) ([]Entry, err
 			end := after + 1
 			size := 0
 			for end <= n.log.commitIndex && end-after <= maxAppendEntries {
-				size += len(n.log.entries[end].Data)
-				if size > maxAppendBytes {
+				entrySize := len(n.log.entries[end].Data)
+				if end > after+1 && entrySize > maxAppendBytes-size {
 					break
 				}
 
+				size += entrySize
 				end++
 			}
 

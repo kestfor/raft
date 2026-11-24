@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+
+	"github.com/kestfor/raft/internal/limits"
 )
 
 const (
 	magic         = "RAFTWAL1"
-	headerSize    = 12
-	MaxRecordSize = 16 << 20
+	headerSize    = limits.WALHeader
+	MaxRecordSize = limits.WALRecord
 )
 
 var (
@@ -196,6 +198,10 @@ func (l *Log) Replay(visit func([]byte) error) error {
 }
 
 func (l *Log) scan(visit func([]byte) error, repair bool) error {
+	info, err := l.file.Stat()
+	if err != nil {
+		return err
+	}
 	offset := int64(len(magic))
 	for {
 		var header [headerSize]byte
@@ -216,6 +222,10 @@ func (l *Log) scan(visit func([]byte) error, repair bool) error {
 		size := binary.LittleEndian.Uint32(header[:4])
 		if crc32.ChecksumIEEE(header[:4]) != binary.LittleEndian.Uint32(header[4:8]) || size > MaxRecordSize {
 			return fmt.Errorf("%w: header at offset %d", ErrCorrupt, offset)
+		}
+
+		if int64(size) > info.Size()-offset-headerSize {
+			return l.incompleteTail(offset, repair)
 		}
 
 		data := make([]byte, int(size))

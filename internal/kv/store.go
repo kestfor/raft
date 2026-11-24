@@ -15,9 +15,11 @@ import (
 	"github.com/kestfor/raft/pkg/raft"
 )
 
-const MaxValueSize = 512 << 10
+// MaxValueSize accounts for base64 and the shortest possible v1 put envelope.
+const MaxValueSize = (raft.MaxCommandSize - len(`{"version":1,"op":"put","key":"","value":""}`)) / 4 * 3
 
 var (
+	ErrTooLarge    = errors.New("encoded KV command exceeds Raft size limit")
 	ErrNotFound    = errors.New("key not found")
 	ErrInvalid     = errors.New("invalid command")
 	ErrNotLeader   = errors.New("not leader")
@@ -98,7 +100,7 @@ func (c command) validate() error {
 		return fmt.Errorf("%w: unsupported command or JSON value", ErrInvalid)
 	}
 	if len(c.Value) > MaxValueSize {
-		return fmt.Errorf("%w: value exceeds 512 KiB", ErrInvalid)
+		return ErrTooLarge
 	}
 	return nil
 }
@@ -111,6 +113,10 @@ func (s *Store) Put(ctx context.Context, key string, value []byte) (uint64, erro
 	data, err := json.Marshal(cmd)
 	if err != nil {
 		return 0, err
+	}
+	// Escaping the key and encoding the value both count toward the Raft command.
+	if len(data) > raft.MaxCommandSize {
+		return 0, ErrTooLarge
 	}
 	index, _, err := s.log.Propose(ctx, data)
 	return index, err

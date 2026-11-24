@@ -21,11 +21,10 @@ type Node struct {
 
 	transport Transport
 
-	mu        sync.Mutex // protects election, log, runtime, and proposals
-	election  electionState
-	log       logState
-	runtime   runtimeState
-	proposals *proposalBatch
+	mu       sync.Mutex // protects election, log, and runtime
+	election electionState
+	log      logState
+	runtime  runtimeState
 }
 
 type electionState struct {
@@ -130,7 +129,6 @@ func (n *Node) Run(ctx context.Context) (runErr error) {
 		n.mu.Lock()
 		n.runtime.running = false
 		n.runtime.electionTimer.Stop()
-		n.rejectProposals(ErrNotRunning)
 		n.notifyLogChange()
 		n.mu.Unlock()
 
@@ -306,7 +304,6 @@ func (n *Node) becomeFollower(ctx context.Context, term uint64, leader NodeID) e
 	n.election.votes = nil
 	n.log.nextIndex, n.log.matchIndex = nil, nil
 	if previous.Role == Leader {
-		n.rejectProposals(ErrLeadershipLost)
 		n.notifyLogChange()
 	}
 
@@ -545,7 +542,6 @@ func (n *Node) fail(err error) error {
 	if n.runtime.failure == nil {
 		n.runtime.failure = err
 		n.runtime.running = false
-		n.rejectProposals(err)
 		n.notifyLogChange()
 		n.wakeRun()
 	}

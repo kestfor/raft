@@ -153,13 +153,17 @@ func parseLogQuery(r *http.Request) (logQuery, error) {
 }
 
 func (h *handler) propose(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > raft.MaxCommandSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "command too large")
+		return
+	}
 	body := http.MaxBytesReader(w, r.Body, raft.MaxCommandSize)
 	defer func() { _ = body.Close() }()
 	data, err := io.ReadAll(body)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "command exceeds 1 MiB"})
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "command too large"})
 		} else {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "could not read request body"})
 		}

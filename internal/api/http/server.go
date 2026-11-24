@@ -13,6 +13,7 @@ import (
 
 	httpcontract "github.com/kestfor/raft/api"
 	"github.com/kestfor/raft/internal/kv"
+	"github.com/kestfor/raft/internal/limits"
 )
 
 type Store interface {
@@ -100,7 +101,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, kv.Record{Key: key, Value: value})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if r.ContentLength > limits.Command {
+		writeError(w, http.StatusRequestEntityTooLarge, "request too large")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limits.Command)
 	decoder := json.NewDecoder(r.Body)
 	var input map[string]json.RawMessage
 	if err := decoder.Decode(&input); err != nil {
@@ -138,10 +143,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !kv.ValidValue(value) {
 		validationError(w, []any{"body", "value"}, "Expected string, number, array, object or null", "value_error")
-		return
-	}
-	if len(value) > kv.MaxValueSize {
-		writeError(w, http.StatusRequestEntityTooLarge, "value exceeds 512 KiB")
 		return
 	}
 	index, err := h.store.Put(ctx, key, value)
@@ -190,6 +191,8 @@ func (h *Handler) respondError(w http.ResponseWriter, r *http.Request, err error
 	switch {
 	case errors.Is(err, kv.ErrNotLeader):
 		h.redirect(w, r)
+	case errors.Is(err, kv.ErrTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 	case errors.As(err, &tooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "request too large")
 	case errors.Is(err, kv.ErrInvalid):

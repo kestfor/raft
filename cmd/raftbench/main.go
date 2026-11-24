@@ -16,6 +16,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/term"
+	"github.com/kestfor/raft/internal/kv"
 	"github.com/kestfor/raft/pkg/kvclient"
 	"github.com/spf13/cobra"
 )
@@ -92,7 +93,7 @@ func newCommand() *cobra.Command {
 	)
 	f.IntVarP(&cfg.Requests, "requests", "n", 1000, "measured requests per workload and repeat (1..1000000)")
 	f.IntVarP(&cfg.Clients, "clients", "c", 8, "parallel HTTP clients (1..1024), one request in flight per client")
-	f.IntVarP(&cfg.Size, "size", "d", 256, "JSON string content size in bytes (0..524286)")
+	f.IntVarP(&cfg.Size, "size", "d", 256, "JSON string content size in bytes (excluding quotes)")
 	f.IntVarP(&cfg.Keyspace, "keyspace", "r", 64, "number of private benchmark keys (1..10000)")
 	f.StringSliceVarP(&cfg.Tests, "tests", "t", []string{"put", "get", "mixed"}, "workloads: put,get,mixed")
 	f.IntVar(&cfg.ReadPercent, "read-percent", 80, "GET percentage in mixed workload")
@@ -110,8 +111,8 @@ func (s settings) validate() error {
 		return fmt.Errorf("require 1 <= clients <= min(requests, 1024) and 1 <= requests <= 1000000")
 	}
 
-	if s.Size < 0 || s.Size > (512<<10)-2 || s.Keyspace < 1 || s.Keyspace > 10000 {
-		return fmt.Errorf("size must be 0..524286 bytes and keyspace 1..10000")
+	if s.Size < 0 || s.Size > kv.MaxValueSize-2 || s.Keyspace < 1 || s.Keyspace > 10000 {
+		return fmt.Errorf("size must be 0..%d bytes and keyspace 1..10000", kv.MaxValueSize-2)
 	}
 
 	if s.ReadPercent < 0 || s.ReadPercent > 100 || s.Warmup < 0 || s.Warmup > 1_000_000 || s.Repeat < 1 ||

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/kestfor/raft/internal/kv"
 	"github.com/kestfor/raft/pkg/kvclient"
 	"github.com/spf13/cobra"
 )
@@ -80,13 +81,13 @@ func newCommand() *cobra.Command {
 				input = strings.NewReader(args[1])
 			}
 
-			value, err := io.ReadAll(io.LimitReader(input, (512<<10)+1))
+			value, err := io.ReadAll(io.LimitReader(input, int64(kv.MaxValueSize)+1))
 			if err != nil {
 				return err
 			}
 
-			if len(value) > 512<<10 {
-				return fmt.Errorf("value exceeds 512 KiB")
+			if len(value) > kv.MaxValueSize {
+				return fmt.Errorf("value exceeds %d bytes", kv.MaxValueSize)
 			}
 
 			index, err := client.Put(cmd.Context(), args[0], value)

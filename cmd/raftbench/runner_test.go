@@ -170,7 +170,7 @@ func TestCLIJSONWarmupAndRedirect(t *testing.T) {
 }
 
 func TestCLIValidationAndHelp(t *testing.T) {
-	for _, args := range [][]string{{"-n", "0"}, {"-c", "0"}, {"-d", "-1"}, {"-d", "524287"}, {"-r", "0"}, {"-t", "invalid"}, {"--read-percent", "101"}, {"--warmup", "-1"}, {"--color", "invalid"}} {
+	for _, args := range [][]string{{"-n", "0"}, {"-c", "0"}, {"-d", "-1"}, {"-d", "2147483647"}, {"-r", "0"}, {"-t", "invalid"}, {"--read-percent", "101"}, {"--warmup", "-1"}, {"--color", "invalid"}} {
 		cmd := newCommand()
 		cmd.SetArgs(args)
 		cmd.SetOut(io.Discard)

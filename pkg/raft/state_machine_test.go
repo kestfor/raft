@@ -169,14 +169,14 @@ func TestProposeWaitsForApplicationAfterStepdown(t *testing.T) {
 			_, value, err := n.Propose(t.Context(), []byte("first"))
 			first <- response{value, err}
 		}()
-		time.Sleep(proposalBatchDelay)
+
 		synctest.Wait()
 		secondResult := make(chan response, 1)
 		go func() {
 			_, value, err := n.Propose(t.Context(), []byte("second"))
 			secondResult <- response{value, err}
 		}()
-		time.Sleep(proposalBatchDelay)
+
 		synctest.Wait()
 		second := n.Status().LastLogIndex
 		if status := n.Status(); status.CommitIndex != second || status.AppliedIndex >= second-1 {
@@ -301,13 +301,13 @@ func TestStateMachineShutdownWaitsForActiveCommand(t *testing.T) {
 					_, _, err := n.Propose(t.Context(), []byte("first"))
 					proposals <- err
 				}()
-				time.Sleep(proposalBatchDelay)
+
 				synctest.Wait()
 				go func() {
 					_, _, err := n.Propose(t.Context(), []byte("second"))
 					proposals <- err
 				}()
-				time.Sleep(proposalBatchDelay)
+
 				synctest.Wait()
 				cancel()
 				synctest.Wait()

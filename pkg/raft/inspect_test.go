@@ -62,7 +62,7 @@ func TestLogSnapshotEmptyAndByteLimit(t *testing.T) {
 		t.Fatalf("empty log: %+v, %v", page, err)
 	}
 	for i := range 5 {
-		n.log.entries = append(n.log.entries, Entry{Index: uint64(i + 1), Term: 1, Data: make([]byte, MaxCommandSize)})
+		n.log.entries = append(n.log.entries, Entry{Index: uint64(i + 1), Term: 1, Data: make([]byte, 1<<20)})
 	}
 	page, err = n.Log(1, 100)
 	if err != nil || len(page.Entries) != 4 || page.LastLogIndex != 5 {
@@ -75,5 +75,14 @@ func TestLogSnapshotEmptyAndByteLimit(t *testing.T) {
 	entries[0].Data[0] = 'X'
 	if n.log.entries[1].Data[0] != 0 {
 		t.Fatal("full log snapshot aliases entry data")
+	}
+}
+
+func TestLogReturnsLargeEntryAlone(t *testing.T) {
+	n, _ := newElectionTestNode(t, "a", nil)
+	n.log.entries = append(n.log.entries, Entry{Index: 1, Term: 1, Data: make([]byte, (4<<20)+1)}, Entry{Index: 2, Term: 1})
+	page, err := n.Log(1, 2)
+	if err != nil || len(page.Entries) != 1 || page.Entries[0].Index != 1 {
+		t.Fatalf("large entry page: count=%d, err=%v", len(page.Entries), err)
 	}
 }

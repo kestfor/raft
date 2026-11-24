@@ -12,6 +12,7 @@ import (
 
 	contract "github.com/kestfor/raft/api"
 	"github.com/kestfor/raft/internal/kv"
+	"github.com/kestfor/raft/internal/limits"
 )
 
 type stubStore struct {
@@ -139,7 +140,7 @@ func TestRedirectErrorsAndSizeLimit(t *testing.T) {
 	for _, tt := range []struct {
 		err  error
 		code int
-	}{{kv.ErrNotFound, 404}, {kv.ErrInvalid, 422}, {kv.ErrUnavailable, 503}, {context.DeadlineExceeded, 504}, {kv.ErrNotLeader, 503}, {errors.New("disk"), 500}} {
+	}{{kv.ErrTooLarge, 413}, {kv.ErrNotFound, 404}, {kv.ErrInvalid, 422}, {kv.ErrUnavailable, 503}, {context.DeadlineExceeded, 504}, {kv.ErrNotLeader, 503}, {errors.New("disk"), 500}} {
 		s = &stubStore{state: kv.Status{Role: "leader"}, err: tt.err}
 		w = httptest.NewRecorder()
 		New(s, nil, time.Second).ServeHTTP(w, httptest.NewRequest("GET", "/query?key=k", nil))
@@ -149,8 +150,9 @@ func TestRedirectErrorsAndSizeLimit(t *testing.T) {
 	}
 	s = &stubStore{state: kv.Status{Role: "leader"}}
 	w = httptest.NewRecorder()
-	body := `{"key":"k","value":"` + strings.Repeat("x", kv.MaxValueSize) + `"}`
-	New(s, nil, time.Second).ServeHTTP(w, httptest.NewRequest("POST", "/query", strings.NewReader(body)))
+	req := httptest.NewRequest("POST", "/query", nil)
+	req.ContentLength = limits.Command + 1
+	New(s, nil, time.Second).ServeHTTP(w, req)
 	if w.Code != 413 || s.called {
 		t.Fatalf("size: %d", w.Code)
 	}

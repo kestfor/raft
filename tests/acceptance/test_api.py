@@ -27,8 +27,8 @@ def test_follower_redirect_preserves_path_and_query(cluster, leader, follower, k
 
 
 @pytest.mark.parametrize("value", ["", "hello", 9007199254740993, -1.25, None,
-                                   [True, None, {"n": 1}], {"nested": False}, "x" * ((512 << 10) - 2)],
-                         ids=["empty", "text", "large-integer", "number", "null", "array", "object", "max-size"])
+                                   [True, None, {"n": 1}], {"nested": False}, "x" * (512 << 10)],
+                         ids=["empty", "text", "large-integer", "number", "null", "array", "object", "512-kib"])
 def test_put_get_overwrite(cluster, leader, follower, key, value):
     index = cluster.put(follower, key, value)
     assert cluster.status(leader)["applied_index"] >= index
@@ -36,6 +36,17 @@ def test_put_get_overwrite(cluster, leader, follower, key, value):
         cluster.get(node, key, value)
     cluster.put(leader, key, {"replacement": [1, None]})
     cluster.get(follower, key, {"replacement": [1, None]})
+
+
+def test_large_json_replication(cluster, leader, key):
+    value = {"nested": ["x" * (10 << 20)]}
+    cluster.ctl(leader, "put", key, "--stdin", data=json.dumps(value).encode())
+    cluster.get(leader, key, value)
+    cluster.catch_up()
+    for node in range(3):
+        code, _, body = cluster.request(node, "GET", "/log", follow=False)
+        assert code == 200
+        assert any(record == {"key": key, "value": value} for record in json.loads(body))
 
 
 @pytest.mark.parametrize("key", ["a/../ключ ?#%//.", "k" * 4097], ids=["encoded-key", "long-key"])
@@ -50,7 +61,6 @@ def test_key_encoding(cluster, follower, key):
     ("POST", "/query", b'{"key":"k"}', 422),
     ("POST", "/query", b'{"key":"k","value":true}', 422),
     ("POST", "/query", b'{"key":1,"value":1}', 422),
-    ("POST", "/query", json.dumps({"key": "oversized", "value": "x" * (512 << 10)}).encode(), 413),
     ("PUT", "/query", b"v", 405),
     ("DELETE", "/query?key=k", None, 405),
     ("GET", "/unknown", None, 404),
