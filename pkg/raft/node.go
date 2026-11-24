@@ -54,7 +54,7 @@ type runtimeState struct {
 	electionDeadline time.Time
 	rpcInFlight      set.Set[NodeID]
 	rpcWG            sync.WaitGroup
-	wake             chan struct{} // Requests an RPC round or reports a failure.
+	wake             chan struct{} // Reports a failure to Run.
 	failure          error
 }
 

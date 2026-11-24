@@ -160,6 +160,56 @@ func propose(t *testing.T, n *Node, data string) uint64 {
 	return index
 }
 
+func TestProposeWaitsForScheduledReplication(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		network, cancels, _ := startMemoryCluster(t)
+		defer stopMemoryCluster(cancels)
+		time.Sleep(151 * time.Millisecond) // Between heartbeat ticks, after the election.
+		requireLeader(t, network, "a", 1)
+		leader := network.nodes["a"]
+		before := leader.Status().CommitIndex
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := leader.Propose(t.Context(), []byte("command"))
+			done <- err
+		}()
+		synctest.Wait()
+		if s := leader.Status(); s.LastLogIndex != before+1 || s.CommitIndex != before {
+			t.Fatalf("proposal must be local before the heartbeat: %+v", s)
+		}
+		for _, peer := range leader.config.Peers {
+			if got := network.nodes[peer].Status().LastLogIndex; got != before {
+				t.Fatalf("peer %s received proposal before heartbeat: index %d", peer, got)
+			}
+		}
+
+		time.Sleep(leader.config.HeartbeatInterval)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("proposal did not finish on the first heartbeat")
+		}
+		for _, peer := range leader.config.Peers {
+			s := network.nodes[peer].Status()
+			if s.LastLogIndex != before+1 || s.CommitIndex != before {
+				t.Fatalf("peer %s after replication heartbeat: %+v", peer, s)
+			}
+		}
+
+		time.Sleep(leader.config.HeartbeatInterval)
+		synctest.Wait()
+		for _, peer := range leader.config.Peers {
+			if got := network.nodes[peer].Status().CommitIndex; got != before+1 {
+				t.Fatalf("peer %s missed commit on next heartbeat: index %d", peer, got)
+			}
+		}
+	})
+}
+
 func TestReplicationPartitionConflictAndCatchUp(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network, cancels, _ := startMemoryCluster(t)
@@ -224,14 +274,32 @@ func TestLaggingFollowerCatchesUpAcrossBatches(t *testing.T) {
 			last = propose(t, network.nodes["a"], string(bytes.Repeat([]byte{0xff}, maxAppendBytes+1)))
 		}
 
+		network.nodes["a"].mu.Lock()
+		committed := cloneEntries(network.nodes["a"].log.entries)
+		network.nodes["a"].mu.Unlock()
+
 		network.mu.Lock()
 		network.isolated = ""
 		network.mu.Unlock()
-		time.Sleep(50 * time.Millisecond)
+
+		// Building several large batches can outlast the isolated follower's
+		// election timeout. Rejoining may cause a new term and another no-op;
+		// wait for convergence without assuming the original leader survives.
+		waitUntil(t, func() bool {
+			state := network.nodes["a"].Status()
+			for _, n := range network.nodes {
+				s := n.Status()
+				if s.CommitIndex < last || s.CommitIndex != state.CommitIndex || s.LastLogIndex != state.LastLogIndex {
+					return false
+				}
+			}
+
+			return true
+		})
 		synctest.Wait()
 		for id, n := range network.nodes {
-			if s := n.Status(); s.CommitIndex != last || s.LastLogIndex != last {
-				t.Fatalf("node %s: %+v", id, s)
+			if !reflect.DeepEqual(n.log.entries[:last+1], committed) {
+				t.Fatalf("node %s lost the committed prefix", id)
 			}
 		}
 
