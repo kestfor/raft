@@ -48,8 +48,10 @@ func (n *Node) appendCommand(ctx context.Context, data []byte) (Entry, error) {
 	}
 
 	n.log.entries = append(n.log.entries, entry)
-	n.advanceCommit()
-	n.wakeRun()
+	// Only a single-node quorum can commit on local append.
+	if len(n.config.Peers) == 0 {
+		n.advanceCommit()
+	}
 
 	return entry, nil
 }

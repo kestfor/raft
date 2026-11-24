@@ -211,6 +211,56 @@ func propose(t *testing.T, n *Node, data string) uint64 {
 	return index
 }
 
+func TestProposeWaitsForScheduledReplication(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		network, cancels, _ := startMemoryCluster(t)
+		defer stopMemoryCluster(cancels)
+		time.Sleep(151 * time.Millisecond) // Between heartbeat ticks, after the election.
+		requireLeader(t, network, "a", 1)
+		leader := network.nodes["a"]
+		before := leader.Status().CommitIndex
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := leader.Propose(t.Context(), []byte("command"))
+			done <- err
+		}()
+		synctest.Wait()
+		if s := leader.Status(); s.LastLogIndex != before+1 || s.CommitIndex != before {
+			t.Fatalf("proposal must be local before the heartbeat: %+v", s)
+		}
+		for _, peer := range leader.config.Peers {
+			if got := network.nodes[peer].Status().LastLogIndex; got != before {
+				t.Fatalf("peer %s received proposal before heartbeat: index %d", peer, got)
+			}
+		}
+
+		time.Sleep(leader.config.HeartbeatInterval)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("proposal did not finish on the first heartbeat")
+		}
+		for _, peer := range leader.config.Peers {
+			s := network.nodes[peer].Status()
+			if s.LastLogIndex != before+1 || s.CommitIndex != before {
+				t.Fatalf("peer %s after replication heartbeat: %+v", peer, s)
+			}
+		}
+
+		time.Sleep(leader.config.HeartbeatInterval)
+		synctest.Wait()
+		for _, peer := range leader.config.Peers {
+			if got := network.nodes[peer].Status().CommitIndex; got != before+1 {
+				t.Fatalf("peer %s missed commit on next heartbeat: index %d", peer, got)
+			}
+		}
+	})
+}
+
 func TestReplicationPartitionConflictAndCatchUp(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network, cancels, _ := startMemoryCluster(t)

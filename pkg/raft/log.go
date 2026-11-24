@@ -191,7 +191,7 @@ func (n *Node) handleAppendResponse(
 	n.log.nextIndex[peer] = n.log.matchIndex[peer] + 1
 	n.advanceCommit()
 
-	if n.log.nextIndex[peer] <= n.lastIndex() || req.LeaderCommit < n.log.commitIndex {
+	if n.log.nextIndex[peer] <= n.lastIndex() {
 		n.replicatePeer(ctx, peer)
 	}
 }
@@ -208,6 +208,5 @@ func (n *Node) advanceCommit() {
 	if index > n.log.commitIndex && n.log.entries[index].Term == n.election.currentTerm {
 		n.log.commitIndex = index
 		n.notifyLogChange()
-		n.wakeRun()
 	}
 }
