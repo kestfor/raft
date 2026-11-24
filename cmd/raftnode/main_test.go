@@ -105,8 +105,8 @@ rpc_timeout: 300ms
 log_level: debug
 log_format: plain
 `)
+	defaults := config.Default()
 	cmd := newCommand(func(_ context.Context, cfg config.Config) error {
-		defaults := config.Default()
 		if cfg.HTTPListenAddress != defaults.HTTPListenAddress || cfg.ListenAddress != defaults.ListenAddress ||
 			cfg.ElectionTimeoutMin != defaults.ElectionTimeoutMin ||
 			cfg.ElectionTimeoutMax != defaults.ElectionTimeoutMax ||
@@ -126,10 +126,10 @@ log_format: plain
 			path,
 			"--listen=:9000",
 			"--http-listen=:8080",
-			"--election-min=500ms",
-			"--election-max=1s",
-			"--heartbeat=100ms",
-			"--rpc-timeout=200ms",
+			"--election-min=" + defaults.ElectionTimeoutMin.String(),
+			"--election-max=" + defaults.ElectionTimeoutMax.String(),
+			"--heartbeat=" + defaults.HeartbeatInterval.String(),
+			"--rpc-timeout=" + defaults.RPCTimeout.String(),
 			"--log-level=info",
 			"--log-format=json",
 		},

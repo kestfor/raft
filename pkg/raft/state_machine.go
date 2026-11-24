@@ -38,15 +38,16 @@ func (n *Node) applyCommitted(ctx context.Context) {
 
 		entry := n.log.entries[n.log.lastApplied+1]
 		entry.Data = slices.Clone(entry.Data)
+
 		n.mu.Unlock()
-		var (
-			value any
-			err   error
-		)
+		var value any
+		var err error
+
 		if !entry.NoOp {
 			value, err = n.config.StateMachine.Do(entry)
 		}
 		n.mu.Lock()
+
 		if err != nil {
 			_ = n.fail(fmt.Errorf("raft: apply entry %d: %w", entry.Index, err))
 			return

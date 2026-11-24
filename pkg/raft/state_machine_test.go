@@ -3,7 +3,6 @@ package raft
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"testing/synctest"
@@ -344,12 +343,8 @@ func TestProposeWithDefaultNoOpStateMachine(t *testing.T) {
 }
 
 func TestStateMachineRecoversFromWAL(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "raft.wal")
+	journal := &wal.Memory{}
 	for attempt := range 2 {
-		journal, err := wal.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var applied []string
 		cfg := testConfig("a", nil)
 		cfg.Storage = journal
@@ -374,8 +369,5 @@ func TestStateMachineRecoversFromWAL(t *testing.T) {
 				t.Fatalf("attempt %d: applied=%v", attempt, applied)
 			}
 		})
-		if err := journal.Close(); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

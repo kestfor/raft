@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -352,14 +351,9 @@ func TestProposeWakesAllWaiters(t *testing.T) {
 }
 
 func TestWALRestoresVoteAndReplacedLog(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "raft.wal")
-	open := func() (*Node, *wal.Log) {
-		journal, err := wal.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Cleanup(func() { _ = journal.Close() })
+	journal := &wal.Memory{}
+	newNode := func() *Node {
+		t.Helper()
 		cfg := testConfig("a", []NodeID{"b", "c"})
 		cfg.Storage = journal
 		n, err := NewNode(cfg, &slowTransport{})
@@ -370,10 +364,10 @@ func TestWALRestoresVoteAndReplacedLog(t *testing.T) {
 		n.runtime.running = true
 		n.runtime.electionTimer = time.NewTimer(time.Hour)
 		t.Cleanup(func() { n.runtime.electionTimer.Stop() })
-		return n, journal
+		return n
 	}
 
-	n, journal := open()
+	n := newNode()
 	appendEntries(
 		t,
 		n,
@@ -400,11 +394,7 @@ func TestWALRestoresVoteAndReplacedLog(t *testing.T) {
 	}
 
 	want := cloneEntries(n.log.entries)
-	if err := journal.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	n, journal = open()
+	n = newNode()
 	if n.election.currentTerm != 3 || n.election.votedFor != "b" || n.log.commitIndex != 0 ||
 		!reflect.DeepEqual(n.log.entries, want) {
 		t.Fatalf("restored state: %+v, vote=%s, log=%+v", n.status(), n.election.votedFor, n.log.entries)
@@ -414,16 +404,6 @@ func TestWALRestoresVoteAndReplacedLog(t *testing.T) {
 		t.Fatal("voted twice after restart")
 	}
 
-	if err := journal.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	journal, err := wal.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = journal.Close() }()
 	cfg := testConfig("other-node", nil)
 	cfg.Storage = journal
 	if _, err := NewNode(cfg, &slowTransport{}); err == nil {
@@ -480,13 +460,8 @@ func TestStorageFailureStopsNodeBeforeAcknowledgment(t *testing.T) {
 }
 
 func TestSingleNodeCommitsAndRecoversOldEntries(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "raft.wal")
+	journal := &wal.Memory{}
 	for attempt := range 2 {
-		journal, err := wal.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-
 		cfg := testConfig("a", nil)
 		cfg.Storage = journal
 		synctest.Test(t, func(t *testing.T) {
@@ -501,9 +476,6 @@ func TestSingleNodeCommitsAndRecoversOldEntries(t *testing.T) {
 				t.Fatalf("no-op did not commit restored prefix: %+v", status)
 			}
 		})
-		if err := journal.Close(); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 

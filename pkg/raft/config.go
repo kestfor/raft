@@ -25,9 +25,9 @@ func DefaultConfig(id NodeID, peers []NodeID) Config {
 	return Config{
 		ID:                 id,
 		Peers:              slices.Clone(peers),
-		ElectionTimeoutMin: 500 * time.Millisecond,
-		ElectionTimeoutMax: 1 * time.Second,
-		HeartbeatInterval:  100 * time.Millisecond,
+		ElectionTimeoutMin: 3000 * time.Millisecond,
+		ElectionTimeoutMax: 4 * time.Second,
+		HeartbeatInterval:  500 * time.Millisecond,
 		RPCTimeout:         200 * time.Millisecond,
 	}
 }

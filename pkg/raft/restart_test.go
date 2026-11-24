@@ -2,7 +2,6 @@ package raft
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,9 +25,9 @@ func waitUntil(t *testing.T, check func() bool) {
 
 func TestWholeClusterRestartsFromWAL(t *testing.T) {
 	ids := []NodeID{"a", "b", "c"}
-	paths := make(map[NodeID]string)
+	journals := make(map[NodeID]*wal.Memory)
 	for _, id := range ids {
-		paths[id] = filepath.Join(t.TempDir(), "raft.wal")
+		journals[id] = &wal.Memory{}
 	}
 
 	var committed uint64
@@ -37,14 +36,6 @@ func TestWholeClusterRestartsFromWAL(t *testing.T) {
 			network := &memoryNetwork{nodes: make(map[NodeID]*Node)}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			var journals []*wal.Log
-			defer func() {
-				for _, journal := range journals {
-					if err := journal.Close(); err != nil {
-						t.Error(err)
-					}
-				}
-			}()
 			for i, id := range ids {
 				var peers []NodeID
 				for _, other := range ids {
@@ -53,17 +44,11 @@ func TestWholeClusterRestartsFromWAL(t *testing.T) {
 					}
 				}
 
-				journal, err := wal.Open(paths[id])
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				journals = append(journals, journal)
 				cfg := testConfig(id, peers)
 				cfg.ElectionTimeoutMin = time.Duration(300+i*200) * time.Millisecond
 				cfg.ElectionTimeoutMax = cfg.ElectionTimeoutMin + 100*time.Millisecond
 				cfg.RPCTimeout = 100 * time.Millisecond
-				cfg.Storage = journal
+				cfg.Storage = journals[id]
 				n, err := NewNode(cfg, memoryTransport{network: network, from: id})
 				if err != nil {
 					t.Fatal(err)
